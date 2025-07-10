@@ -6,10 +6,14 @@ Overview
 
 Python tool for benchmarking various variant classification tools (Franklin, GeneBE, InterVar, TAPES, LIRICAL, CPSR) against manual annotations.
 This tool evaluates the performance of different variant classification tools by comparing their results with expert manual annotations. 
+
+
 Features
 
 
 Multi-tool comparison: Benchmarks Franklin, GeneBE, InterVar, TAPES, LIRICAL, and CPSR
+
+
 Separate analysis: Handles Mendelian and cancer samples separately
 Comprehensive metrics:
 
