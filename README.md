@@ -42,9 +42,11 @@ Usage
 Prepare your data files:
 
 ACMG_data.csv:
-Unified ACMG data containing variant classifications from all tools
+Unified ACMG data containing variant classifications from all tools     
+                                               
 LIRICAL_data.tsv: 
 LIRICAL ranking data
+
 hgnc_standardized_manual_annotations_.xlsx: 
 Manual annotations (ground truth)
 
