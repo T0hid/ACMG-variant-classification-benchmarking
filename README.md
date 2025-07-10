@@ -12,10 +12,9 @@ Ranking accuracy (Top-1, Top-5, Top-10, etc.)
 Retention rates
 F1 scores and recall
 AUC analysis
-Statistical validation (Friedman test, Nemenyi post-hoc, Fisher's exact test)
+Statistical validation (Friedman test, Nemenyi post-hoc,)
 
 
-Publication-ready figures: Generates multi-panel figures suitable for scientific publications
 
 Requirements
 pandas
@@ -42,9 +41,12 @@ Usage
 
 Prepare your data files:
 
-ACMG_185.csv: Unified ACMG data containing variant classifications from all tools
-LIRICAL_185.tsv: LIRICAL ranking data
-hgnc_standardized_matched_manual_annotations_185.xlsx: Manual annotations (ground truth)
+ACMG_data.csv:
+Unified ACMG data containing variant classifications from all tools
+LIRICAL_data.tsv: 
+LIRICAL ranking data
+hgnc_standardized_manual_annotations_.xlsx: 
+Manual annotations (ground truth)
 
 
 Update file paths in the script:
