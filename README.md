@@ -1,7 +1,8 @@
-ACMG Variant Classification Benchmarking
-A Python tool for benchmarking various variant classification tools (Franklin, GeneBE, InterVar, TAPES, LIRICAL, CPSR) against manual annotations.
+Evaluation of ACMG/AMP-based Variant Classification Tools Highlights the Critical Importance of Phenotypic Data IncorporationA Python tool for benchmarking various variant classification tools (Franklin, GeneBE, InterVar, TAPES, LIRICAL, CPSR) against manual annotations.
 Overview
-This tool evaluates the performance of different variant classification tools by comparing their results with expert manual annotations. It generates publication-ready figures and comprehensive statistical reports.
+
+
+This tool evaluates the performance of different variant classification tools by comparing their results with expert manual annotations. 
 Features
 
 Multi-tool comparison: Benchmarks Franklin, GeneBE, InterVar, TAPES, LIRICAL, and CPSR
