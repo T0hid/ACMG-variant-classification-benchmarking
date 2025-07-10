@@ -64,3 +64,6 @@ Update file paths in the script:
 pythonbase_dir = "path/to/your/data"
 Run the benchmarking:
 bashpython variant_benchmarking.py
+
+Contact information:
+tohid.ghasemnejad@unsw.edu.au
