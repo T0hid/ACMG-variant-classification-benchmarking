@@ -53,9 +53,5 @@ Manual annotations (ground truth)
 
 Update file paths in the script:
 pythonbase_dir = "path/to/your/data"
-unified_acmg_path = os.path.join(base_dir, "ACMG_185.csv")
-lirical_folder_path = base_dir
-manual_annotations_path = os.path.join(base_dir, "manual_annotations.xlsx")
-
 Run the benchmarking:
 bashpython variant_benchmarking.py
