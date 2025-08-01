@@ -1,11 +1,11 @@
-variant_benchmarking.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Updated Variant Classification Tools Benchmarking Script with Panel Generation
+Updated Variant Classification Tools Benchmarking Script with Journal-Compliant Figures
+and a Comprehensive Text Report.
 
-This script benchmarks variant classification tools against manual annotations,
-generating publication-ready multi-panel figures combining Mendelian and cancer analyses.
+This script performs a unified analysis on a dataset, generates publication-ready
+figures, and produces a detailed text report with all key performance metrics.
 """
 
 import pandas as pd
@@ -32,30 +32,59 @@ import matplotlib.patches as patches
 from statsmodels.stats.multitest import multipletests
 import string
 
-# Set larger font sizes for all text elements
+# JOURNAL-COMPLIANT SETTINGS
+# Convert mm to inches for matplotlib (1 inch = 25.4 mm)
+COLUMN_WIDTH_INCHES = 180 / 25.4  # 7.09 inches for 2-column width
+SINGLE_COLUMN_WIDTH = 88 / 25.4   # 3.46 inches for 1-column width
+
+# Set journal-compliant font sizes and style
 plt.rcParams.update({
-    'font.size': 14,              # Base font size
-    'font.family': 'serif',
-    'font.serif': ['Times New Roman'],
-    'axes.labelsize': 16,         # Axis labels
-    'axes.titlesize': 18,         # Axis title
-    'xtick.labelsize': 14,        # X-tick labels
-    'ytick.labelsize': 14,        # Y-tick labels
-    'legend.fontsize': 12,        # Legend text
-    'figure.titlesize': 20        # Figure title
+    'font.size': 6,          # Base font size (within 5-7pt range)
+    'font.family': 'sans-serif',
+    'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
+    'axes.labelsize': 6,         # Axis labels
+    'axes.titlesize': 7,         # Subplot titles
+    'xtick.labelsize': 5,        # X-tick labels (minimum allowed)
+    'ytick.labelsize': 5,        # Y-tick labels (minimum allowed)
+    'legend.fontsize': 5,        # Legend text (minimum allowed)
+    'figure.titlesize': 7,       # Figure title (maximum allowed)
+    'axes.linewidth': 0.5,       # Thinner lines for cleaner look
+    'lines.linewidth': 1,        # Line plot width
+    'lines.markersize': 3,       # Smaller markers
+    'legend.frameon': True,      # Always show legend frame
+    'legend.fancybox': False,    # Simple box
+    'legend.shadow': False,      # No shadow for cleaner look
+    'legend.borderpad': 0.3,     # Reduce padding
+    'legend.columnspacing': 0.5, # Reduce column spacing
+    'legend.handlelength': 1.0,  # Shorter legend handles
+    'legend.handletextpad': 0.3, # Less space between handle and text
+    'legend.borderaxespad': 0.3, # Less space to axes
+    'figure.dpi': 1200,          # High resolution
+    'savefig.dpi': 1200,         # High resolution for saving
+    'savefig.bbox': 'tight',     # Tight bounding box
+    'savefig.pad_inches': 0.05,  # Minimal padding
 })
-sns.set_context("paper")  # Use paper context for multi-panel figures
+
+# Use paper context but override with our specific settings
+sns.set_style("ticks")  # Clean style with ticks
+sns.set_context("paper", rc={"lines.linewidth": 1})
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
+# Panel label styling function
+def add_panel_label(ax, label, x=-0.15, y=1.05):
+    """Add a panel label (A, B, C, etc.) to an axis with journal-compliant styling."""
+    ax.text(x, y, label, transform=ax.transAxes,
+            fontsize=7, fontweight='bold', va='bottom', ha='right')
+
 class VariantToolBenchmarker:
-    """Class to benchmark variant classification tools."""
-    
+    """Class to benchmark variant classification tools with journal-compliant visualization."""
+
     def __init__(self, acmg_path, lirical_folder, manual_path, exclude_tools=None, sample_subset=None, analysis_type='all'):
         """
         Initialize the benchmarker with paths to data files.
-        
+
         Parameters:
         -----------
         acmg_path : str
@@ -69,7 +98,7 @@ class VariantToolBenchmarker:
         sample_subset : list, optional
             List of sample IDs to include in the analysis (default: all samples)
         analysis_type : str
-            Type of analysis ('all', 'cancer', or 'mendelian')
+            A label for the analysis type (e.g., 'all', 'cancer', 'mendelian')
         """
         self.acmg_path = acmg_path
         self.lirical_folder = lirical_folder
@@ -77,38 +106,42 @@ class VariantToolBenchmarker:
         self.exclude_tools = exclude_tools if exclude_tools is not None else ['charger', 'cpsr']
         self.sample_subset = sample_subset
         self.analysis_type = analysis_type
-        
+
         # Initialize result containers
         self.results = {}
         self.tool_data = {}
         self.metrics = {}
         self.statistical_tests = {}  # To store statistical test results
+        self.max_rank_length = 0 # For consistent AUC scoring
 
     def load_data(self):
         """Load and preprocess all data sources."""
-        print(f"Loading and preprocessing data for {self.analysis_type} analysis...")
-        
+        print(f"Loading and preprocessing data for '{self.analysis_type}' analysis...")
+
         # Load unified ACMG data
         self.acmg_data = pd.read_csv(self.acmg_path)
         print(f"Loaded ACMG data: {self.acmg_data.shape[0]} rows")
-        
+
         # Filter out excluded tools
-        self.acmg_filtered = self.acmg_data[~self.acmg_data['tool'].isin(self.exclude_tools)]
+        self.acmg_filtered = self.acmg_data[~self.acmg_data['tool'].str.lower().isin([t.lower() for t in self.exclude_tools])]
         print(f"After filtering {', '.join(self.exclude_tools)}: {self.acmg_filtered.shape[0]} rows")
-        
+
         # Load manual annotations (ground truth)
         self.manual_data = pd.read_excel(self.manual_path)
         print(f"Loaded manual annotations: {self.manual_data.shape[0]} rows")
-        # Fix column names if needed
-        if 'sample_id' in self.manual_data.columns and 'Sample id' not in self.manual_data.columns:
-            self.manual_data = self.manual_data.rename(columns={'sample_id': 'Sample id'})
-            print("Renamed 'sample_id' column to 'Sample id'")
+        
+        # Standardize sample ID column name
+        sample_id_col = self.find_sample_id_column(self.manual_data)
+        if sample_id_col and sample_id_col != 'Sample id':
+            self.manual_data = self.manual_data.rename(columns={sample_id_col: 'Sample id'})
+            print(f"Renamed '{sample_id_col}' column to 'Sample id'")
+
         # Filter by sample subset if provided
         if self.sample_subset:
             self.manual_data = self.manual_data[self.manual_data['Sample id'].isin(self.sample_subset)]
             self.acmg_filtered = self.acmg_filtered[self.acmg_filtered['sample_id'].isin(self.sample_subset)]
             print(f"Filtered to {len(self.sample_subset)} samples: {self.manual_data.shape[0]} manual annotations, {self.acmg_filtered.shape[0]} ACMG variants")
-        
+
         # Load LIRICAL data with proper encoding
         self.lirical_data = self._load_lirical_data()
         if self.lirical_data is not None:
@@ -117,556 +150,355 @@ class VariantToolBenchmarker:
             if self.sample_subset:
                 self.lirical_data = self.lirical_data[self.lirical_data['sample_id'].isin(self.sample_subset)]
                 print(f"Filtered LIRICAL data to {len(self.sample_subset)} samples: {self.lirical_data.shape[0]} rows")
-        
-        # Analyze Franklin data to understand its characteristics
-        self._check_franklin_data()
-        
+
         # Create a unified dataset by tool
         self._prepare_tool_data()
         print("Data loading and preprocessing complete.")
 
-    def _check_franklin_data(self):
-        """
-        Special function to check Franklin data and report its characteristics.
-        This helps understand how Franklin prioritizes variants and what columns might be useful.
-        """
-        # Get Franklin data
-        franklin_df = self.acmg_filtered[self.acmg_filtered['tool'] == 'franklin'].copy()
-        
-        if franklin_df.empty:
-            print("No Franklin data found")
-            return
-        
-        print(f"\nAnalyzing Franklin data: {len(franklin_df)} variants across {franklin_df['sample_id'].nunique()} samples")
-        
-        # Check classifications
-        class_counts = franklin_df['classification'].value_counts()
-        total_variants = len(franklin_df)
-        
-        print("\nClassification distribution:")
-        for cls, count in class_counts.items():
-            percentage = (count / total_variants) * 100
-            print(f"  {cls}: {count} ({percentage:.1f}%)")
-        
-        # Check available columns that might be useful for ranking
-        print("\nPotentially useful columns for ranking:")
-        important_keywords = ['rank', 'score', 'priority', 'impact', 'effect', 'consequence', 
-                             'cadd', 'freq', 'maf', 'vaf', 'pathogenic']
-        
-        useful_columns = []
-        for col in franklin_df.columns:
-            if any(keyword in col.lower() for keyword in important_keywords):
-                useful_columns.append(col)
-        
-        for col in useful_columns:
-            # Get some statistics for this column
-            try:
-                if franklin_df[col].dtype in ['int64', 'float64']:
-                    print(f"  {col}: numeric, range={franklin_df[col].min()}-{franklin_df[col].max()}, unique values={franklin_df[col].nunique()}")
-                else:
-                    print(f"  {col}: {franklin_df[col].dtype}, unique values={franklin_df[col].nunique()}")
-            except:
-                print(f"  {col}: unknown type")
-        
-        # Check variant counts per sample
-        variant_counts = franklin_df.groupby('sample_id').size()
-        print(f"\nVariant counts per sample: min={variant_counts.min()}, max={variant_counts.max()}, mean={variant_counts.mean():.1f}")
-        
-        # Check if all samples have the same number of variants
-        if variant_counts.nunique() == 1:
-            print(f"All samples have exactly {variant_counts.iloc[0]} variants - suggests data was pre-filtered")
-        
-        # Return useful columns for use in ranking
-        return useful_columns
+    def find_sample_id_column(self, df):
+        """Finds the sample ID column from a list of possible names."""
+        possible_names = ['Sample id', 'sample_id', 'Sample_id', 'SampleID', 'Sample ID', 'ID', 'sample']
+        for name in possible_names:
+            if name in df.columns:
+                return name
+        return None
 
     def _load_lirical_data(self):
-        """
-        Load LIRICAL data from a single combined TSV file instead of multiple files.
-        """
-        lirical_file = os.path.join(self.lirical_folder, "LIRICAL_185.tsv")
-        
+        """Load LIRICAL data from a single combined TSV file."""
+        lirical_file = os.path.join(self.lirical_folder, "LIRICAL_163new.tsv")
+
         if not os.path.exists(lirical_file):
             print(f"LIRICAL file not found: {lirical_file}")
             return None
-        
+
         print(f"Loading combined LIRICAL file: {lirical_file}")
-        
+
         try:
             # Load TSV file
             lirical_data = pd.read_csv(lirical_file, sep='\t')
-            
+
             # Verify required columns exist
             required_columns = ['rank', 'sample_id', 'hgnc_gene']
             missing_columns = [col for col in required_columns if col not in lirical_data.columns]
-            
+
             if missing_columns:
                 print(f"Error: Missing required columns in LIRICAL data: {', '.join(missing_columns)}")
                 return None
-            
+
             # Ensure LIRICAL tool name is consistent
-            if 'tool' in lirical_data.columns:
-                lirical_data['tool'] = lirical_data['tool'].str.lower()
-            else:
-                lirical_data['tool'] = 'lirical'
-                
+            lirical_data['tool'] = 'lirical'
+            
             print(f"Loaded LIRICAL data with {len(lirical_data)} rows across {lirical_data['sample_id'].nunique()} samples")
             return lirical_data
-            
+
         except Exception as e:
             print(f"Error loading LIRICAL data: {e}")
             return None
 
     def _prepare_tool_data(self):
-        """
-        Updated function to prepare data for each tool using native ranking systems.
-        This treats all tools similar to LIRICAL, preserving their native prioritization.
-        """
-        # Get list of tools (excluding specified tools)
+        """Prepare data for each tool using native ranking systems."""
         tools = self.acmg_filtered['tool'].unique().tolist()
         
-        # Add LIRICAL if available
         if self.lirical_data is not None:
             tools.append('LIRICAL')
         
+        # Ensure no excluded tools slip through
+        tools = [t for t in tools if t.lower() not in [ex.lower() for ex in self.exclude_tools]]
+        
         print(f"Preparing data for tools: {', '.join(tools)}")
-        
-        # Get ground truth genes for reference
-        ground_truth = {}
-        for _, row in self.manual_data.iterrows():
-            sample_id = row['Sample id']
-            gene = row['hgnc_gene']
-            ground_truth[sample_id] = gene
-        
-        # For each tool, create a dataset with ranking information
+
+        ground_truth = {row['Sample id']: row['hgnc_gene'] for _, row in self.manual_data.iterrows()}
+
         for tool in tools:
-            if tool != 'LIRICAL':
-                # Get data for this tool
-                tool_df = self.acmg_filtered[self.acmg_filtered['tool'] == tool].copy()
+            tool_lower = tool.lower() # Case-insensitive comparison
+            if tool_lower != 'lirical':
+                tool_df = self.acmg_filtered[self.acmg_filtered['tool'].str.lower() == tool_lower].copy()
                 
-                # Check if we have data for this tool
                 if tool_df.empty:
                     print(f"Warning: No data found for tool {tool}")
                     continue
                 
-                # Debug info
                 print(f"Processing {tool} with {len(tool_df)} variants across {tool_df['sample_id'].nunique()} samples")
                 
-                # Create a mapping for each sample's gene rankings
                 sample_gene_rankings = {}
-                
-                # Process each sample separately
                 for sample_id, group in tool_df.groupby('sample_id'):
-                    # Skip if sample isn't in ground truth
                     if sample_id not in ground_truth:
                         continue
                     
-                    try:
-                        # For all tools, use their native ranking (similar to LIRICAL)
-                        # Check for tool-specific ranking columns
-                        if tool == 'franklin':
-                            # Check if there's a ranking column specific to Franklin
-                            franklin_rank_cols = [col for col in group.columns if any(x in col.lower() for x in ['rank', 'score', 'priority']) and 'franklin' in col.lower()]
-                            
-                            if franklin_rank_cols:
-                                # Use Franklin's own ranking column
-                                rank_col = franklin_rank_cols[0]
-                                print(f"Using {rank_col} for Franklin ranking")
-                                sorted_df = group.sort_values(by=[rank_col], ascending=True if 'rank' in rank_col.lower() else False)
-                            else:
-                                # Preserve original order - Franklin likely already sorted variants by importance
-                                # This respects Franklin's native prioritization
-                                sorted_df = group
-                        
-                        elif tool == 'genebe':
-                            # Check for GeneBE ranking columns
-                            genebe_rank_cols = [col for col in group.columns if any(x in col.lower() for x in ['rank', 'score', 'priority']) and 'genebe' in col.lower()]
-                            
-                            if genebe_rank_cols:
-                                rank_col = genebe_rank_cols[0]
-                                print(f"Using {rank_col} for GeneBE ranking")
-                                sorted_df = group.sort_values(by=[rank_col], ascending=True if 'rank' in rank_col.lower() else False)
-                            else:
-                                # If no specific ranking column, use order as is
-                                sorted_df = group
-                        
-                        elif tool == 'intervar':
-                            # Check for InterVar ranking columns
-                            intervar_rank_cols = [col for col in group.columns if any(x in col.lower() for x in ['rank', 'score', 'priority']) and 'intervar' in col.lower()]
-                            
-                            if intervar_rank_cols:
-                                rank_col = intervar_rank_cols[0]
-                                print(f"Using {rank_col} for InterVar ranking")
-                                sorted_df = group.sort_values(by=[rank_col], ascending=True if 'rank' in rank_col.lower() else False)
-                            else:
-                                # If no specific ranking column, use order as is
-                                sorted_df = group
-                        
-                        elif tool == 'tapes':
-                            # Check for TAPES ranking columns
-                            tapes_rank_cols = [col for col in group.columns if any(x in col.lower() for x in ['rank', 'score', 'priority']) and 'tapes' in col.lower()]
-                            
-                            if tapes_rank_cols:
-                                rank_col = tapes_rank_cols[0]
-                                print(f"Using {rank_col} for TAPES ranking")
-                                sorted_df = group.sort_values(by=[rank_col], ascending=True if 'rank' in rank_col.lower() else False)
-                            else:
-                                # If no specific ranking column, use order as is
-                                sorted_df = group
-                        
-                        elif tool == 'cpsr':
-                            # Check for CPSR ranking columns
-                            cpsr_rank_cols = [col for col in group.columns if any(x in col.lower() for x in ['rank', 'score', 'priority']) and 'cpsr' in col.lower()]
-                            
-                            if cpsr_rank_cols:
-                                rank_col = cpsr_rank_cols[0]
-                                print(f"Using {rank_col} for CPSR ranking")
-                                sorted_df = group.sort_values(by=[rank_col], ascending=True if 'rank' in rank_col.lower() else False)
-                            else:
-                                # If no specific ranking column, use order as is
-                                sorted_df = group
-                        
-                        else:
-                            # For any other tool, check for ranking columns
-                            rank_cols = [col for col in group.columns if any(x in col.lower() for x in ['rank', 'score', 'priority'])]
-                            
-                            if rank_cols:
-                                rank_col = rank_cols[0]
-                                print(f"Using {rank_col} for {tool} ranking")
-                                sorted_df = group.sort_values(by=[rank_col], ascending=True if 'rank' in rank_col.lower() else False)
-                            else:
-                                # If no ranking column found, preserve original order
-                                sorted_df = group
-                        
-                        # Extract sorted genes
-                        sorted_genes = []
-                        seen = set()
-                        for gene in sorted_df['hgnc_gene'].tolist():
-                            if gene not in seen:
-                                sorted_genes.append(gene)
-                                seen.add(gene)
-                        
-                        # Store rankings
-                        sample_gene_rankings[sample_id] = sorted_genes
-                        
-                        # Debug info for top genes
-                        true_gene = ground_truth[sample_id]
-                        if true_gene in sorted_genes:
-                            rank = sorted_genes.index(true_gene) + 1
-                            if rank <= 5:  # Only log for top-ranked matches
-                                print(f"  {tool} - {sample_id}: Found {true_gene} at rank {rank}/{len(sorted_genes)}")
-                    
-                    except Exception as e:
-                        print(f"Error processing {tool} data for sample {sample_id}: {e}")
-                        # Fallback: just use genes as they appear
-                        sorted_genes = group['hgnc_gene'].unique().tolist()
-                        sample_gene_rankings[sample_id] = sorted_genes
+                    # Preserve original order (native ranking) and remove duplicates
+                    seen = set()
+                    sorted_genes = [gene for gene in group['hgnc_gene'].tolist() if not (gene in seen or seen.add(gene))]
+                    sample_gene_rankings[sample_id] = sorted_genes
                 
-                # Store all sample rankings for this tool
                 self.tool_data[tool] = sample_gene_rankings
-                
-                # Calculate and display summary metrics
                 self._calculate_tool_summary(tool, sample_gene_rankings, ground_truth)
-            
+
             else:  # Special handling for LIRICAL
-                # Process LIRICAL data if available
                 if self.lirical_data is not None:
                     print(f"Processing LIRICAL data with {len(self.lirical_data)} rows across {self.lirical_data['sample_id'].nunique()} samples")
                     
-                    # No need to check for rank column as it's already in the unified data
                     sample_gene_rankings = {}
-                    
                     for sample_id, group in self.lirical_data.groupby('sample_id'):
                         try:
-                            # Sort by rank (ascending = lowest rank first)
-                            sorted_genes = group.sort_values(by=['rank'], ascending=True)['hgnc_gene'].tolist()
-                            
-                            # Remove duplicates
+                            sorted_genes_with_dupes = group.sort_values(by=['rank'], ascending=True)['hgnc_gene'].tolist()
                             seen = set()
-                            sorted_genes = [g for g in sorted_genes if not (g in seen or seen.add(g))]
-                            
+                            sorted_genes = [g for g in sorted_genes_with_dupes if not (g in seen or seen.add(g))]
                             sample_gene_rankings[sample_id] = sorted_genes
-                            
-                            # Check if ground truth gene is found
-                            if sample_id in ground_truth:
-                                true_gene = ground_truth[sample_id]
-                                if true_gene in sorted_genes:
-                                    rank = sorted_genes.index(true_gene) + 1
-                                    if rank <= 5:  # Only log for top-ranked matches
-                                        print(f"  LIRICAL - {sample_id}: Found {true_gene} at rank {rank}/{len(sorted_genes)}")
-                                        
                         except Exception as e:
                             print(f"Error processing LIRICAL data for sample {sample_id}: {e}")
                     
-                    # Store LIRICAL rankings
                     self.tool_data[tool] = sample_gene_rankings
-                    
-                    # Calculate and display summary metrics
                     self._calculate_tool_summary(tool, sample_gene_rankings, ground_truth)
 
     def _calculate_tool_summary(self, tool, sample_gene_rankings, ground_truth):
         """Calculate and display summary metrics for a tool."""
-        found_count = 0
-        top1_count = 0
-        top5_count = 0
-        top10_count = 0
-        for sample_id, true_gene in ground_truth.items():
-            if sample_id in sample_gene_rankings:
-                if true_gene in sample_gene_rankings[sample_id]:
-                    found_count += 1
-                    rank = sample_gene_rankings[sample_id].index(true_gene) + 1
-                    if rank == 1:
-                        top1_count += 1
-                    if rank <= 5:
-                        top5_count += 1
-                    if rank <= 10:
-                        top10_count += 1
+        found_count, top1_count, top5_count, top10_count = 0, 0, 0, 0
         
-        total_samples = len([s for s in ground_truth.keys() if s in sample_gene_rankings])
+        # Only consider samples that the tool processed
+        processed_samples = [s for s in ground_truth.keys() if s in sample_gene_rankings]
+        total_samples = len(processed_samples)
+        
+        for sample_id in processed_samples:
+            true_gene = ground_truth[sample_id]
+            ranked_list = sample_gene_rankings[sample_id]
+            if true_gene in ranked_list:
+                found_count += 1
+                rank = ranked_list.index(true_gene) + 1
+                if rank == 1: top1_count += 1
+                if rank <= 5: top5_count += 1
+                if rank <= 10: top10_count += 1
+        
         print(f"Tool {tool} summary:")
-        print(f"  Found {found_count} out of {total_samples} ground truth genes overall")
+        print(f"  Processed {total_samples} out of {len(ground_truth)} ground truth samples.")
         if total_samples > 0:
             print(f"  Top-1 accuracy: {top1_count/total_samples*100:.1f}%")
             print(f"  Top-5 accuracy: {top5_count/total_samples*100:.1f}%")
             print(f"  Top-10 accuracy: {top10_count/total_samples*100:.1f}%")
-            print(f"  Not found: {total_samples - found_count} ({(total_samples - found_count)/total_samples*100:.1f}%)")
+            print(f"  Retention Rate (Found/Processed): {found_count/total_samples*100:.1f}%")
 
     def calculate_metrics(self):
         """Calculate all performance metrics for each tool."""
         print("Calculating performance metrics...")
         
+        # Pre-calculate the max rank length across all tools for consistent AUC scoring
+        max_length = 0
+        for tool in self.tool_data.keys():
+            tool_rankings = self.tool_data[tool]
+            if not tool_rankings: continue
+            max_len_tool = max((len(v) for v in tool_rankings.values()), default=0)
+            if max_len_tool > max_length:
+                max_length = max_len_tool
+        self.max_rank_length = max_length
+
         for tool, rankings in self.tool_data.items():
             print(f"Processing tool: {tool}")
             
-            tool_metrics = {
-                'ranking': {},
-                'filtering': {},
-                'accuracy': {}
+            ranking_metrics = self._calculate_ranking_metrics(rankings)
+            filtering_metrics = self._calculate_filtering_metrics(rankings)
+            accuracy_metrics = self._calculate_accuracy_metrics(rankings, ranking_metrics)
+            distribution_metrics = self._calculate_distribution_metrics(rankings)
+
+            self.metrics[tool] = {
+                'ranking': ranking_metrics,
+                'filtering': filtering_metrics,
+                'accuracy': accuracy_metrics,
+                'distribution': distribution_metrics
             }
-            
-            # Calculate ranking metrics
-            tool_metrics['ranking'] = self._calculate_ranking_metrics(rankings)
-            
-            # Calculate filtering metrics
-            tool_metrics['filtering'] = self._calculate_filtering_metrics(rankings)
-            
-            # Calculate accuracy metrics
-            tool_metrics['accuracy'] = self._calculate_accuracy_metrics(rankings)
-            
-            # Store metrics for this tool
-            self.metrics[tool] = tool_metrics
         
         print("Performance metrics calculation complete.")
 
     def _calculate_ranking_metrics(self, rankings):
-        """
-        Calculate ranking metrics:
-        - Top-rank percentage
-        - Top-N percentage (N=5,10,20,30,40,50)
-        - Mean and median rank (only for found cases)
-        - Min/max rank (only for found cases)
-        """
-        metrics = {}
-        
+        """Calculate ranking metrics (Top-N accuracy, rank stats)."""
+        metrics_rank = {}
         ground_truth = {row['Sample id']: row['hgnc_gene'] for _, row in self.manual_data.iterrows()}
         
-        found_ranks = []  # Only collect ranks where the gene is found
-        top_1_count = 0
-        top_n_counts = {5: 0, 10: 0, 20: 0, 30: 0, 40: 0, 50: 0}
+        found_ranks = []
+        top_n_counts = {1: 0, 5: 0, 10: 0, 20: 0, 50: 0}
         total_samples = 0
         
+        # Iterate over all ground truth samples to correctly calculate accuracy
         for sample_id, true_gene in ground_truth.items():
+            total_samples += 1
             if sample_id in rankings:
-                total_samples += 1
                 ranked_genes = rankings[sample_id]
                 
                 if true_gene in ranked_genes:
                     rank = ranked_genes.index(true_gene) + 1
-                    found_ranks.append(rank)  # Collect rank only if found
-                    if rank == 1:
-                        top_1_count += 1
+                    found_ranks.append(rank)
                     for n in top_n_counts.keys():
                         if rank <= n:
                             top_n_counts[n] += 1
         
         if total_samples > 0:
-            metrics['top_rank_percentage'] = (top_1_count / total_samples) * 100
+            metrics_rank['top_rank_percentage'] = (top_n_counts[1] / total_samples) * 100
             for n, count in top_n_counts.items():
-                metrics[f'top_{n}_percentage'] = (count / total_samples) * 100
+                metrics_rank[f'top_{n}_percentage'] = (count / total_samples) * 100
         else:
-            metrics['top_rank_percentage'] = np.nan
+            metrics_rank['top_rank_percentage'] = np.nan
             for n in top_n_counts.keys():
-                metrics[f'top_{n}_percentage'] = np.nan
+                metrics_rank[f'top_{n}_percentage'] = np.nan
         
         if found_ranks:
-            metrics['mean_rank'] = np.mean(found_ranks)
-            metrics['median_rank'] = np.median(found_ranks)
-            metrics['min_rank'] = np.min(found_ranks)
-            metrics['max_rank'] = np.max(found_ranks)
+            metrics_rank['mean_rank'] = np.mean(found_ranks)
+            metrics_rank['median_rank'] = np.median(found_ranks)
         else:
-            metrics['mean_rank'] = np.nan
-            metrics['median_rank'] = np.nan
-            metrics['min_rank'] = np.nan
-            metrics['max_rank'] = np.nan
-        
-        return metrics
+            metrics_rank['mean_rank'] = np.nan
+            metrics_rank['median_rank'] = np.nan
+            
+        return metrics_rank
 
     def _calculate_filtering_metrics(self, rankings):
-        """
-        Calculate filtering metrics:
-        - Filtered-out rate
-        - Retention rate
-        """
-        metrics = {}
-        
+        """Calculate filtering metrics (retention rate)."""
+        metrics_filter = {}
         ground_truth = {row['Sample id']: row['hgnc_gene'] for _, row in self.manual_data.iterrows()}
         
-        filtered_out_count = 0
-        retained_count = 0
-        total_samples = 0
+        retained_count, total_samples = 0, 0
         
+        # Retention is based on samples the tool processed
         for sample_id, true_gene in ground_truth.items():
             if sample_id in rankings:
                 total_samples += 1
-                ranked_genes = rankings[sample_id]
-                if true_gene in ranked_genes:
+                if true_gene in rankings[sample_id]:
                     retained_count += 1
-                else:
-                    filtered_out_count += 1
         
         if total_samples > 0:
-            metrics['filtered_out_rate'] = (filtered_out_count / total_samples) * 100
-            metrics['retention_rate'] = (retained_count / total_samples) * 100
+            metrics_filter['retention_rate'] = (retained_count / total_samples) * 100
         else:
-            metrics['filtered_out_rate'] = np.nan
-            metrics['retention_rate'] = np.nan
-        
-        return metrics
+            metrics_filter['retention_rate'] = np.nan
+            
+        return metrics_filter
 
-    def _calculate_accuracy_metrics(self, rankings):
-        """
-        Calculate accuracy metrics:
-        - Precision at different rank thresholds
-        - Recall (sensitivity)
-        - Specificity
-        - F1 score
-        """
-        metrics = {}
-        
+    def _calculate_accuracy_metrics(self, rankings, ranking_metrics):
+        """Calculate accuracy metrics like Precision, Recall, F1, and AUC."""
+        metrics_acc = {}
         ground_truth = {row['Sample id']: row['hgnc_gene'] for _, row in self.manual_data.iterrows()}
-        
         rank_thresholds = [1, 5, 10, 20, 50]
         
-        # Calculate precision at different thresholds using global precision
-        for threshold in rank_thresholds:
-            true_positives = 0
-            total_predictions = 0
-            
+        # Mean Precision@k
+        for k in rank_thresholds:
+            precisions = []
+            for sample_id, true_gene in ground_truth.items():
+                if sample_id in rankings:
+                    top_k_genes = rankings[sample_id][:k]
+                    if not top_k_genes:
+                        precisions.append(0.0)
+                        continue
+                    num_relevant_in_k = 1 if true_gene in top_k_genes else 0
+                    precisions.append(num_relevant_in_k / k)
+                else:
+                    precisions.append(0.0)
+            metrics_acc[f'precision_at_{k}'] = np.mean(precisions) if precisions else 0.0
+
+        # Recall (based on all ground truth samples)
+        true_positives = sum(1 for sid, tg in ground_truth.items() if sid in rankings and tg in rankings[sid])
+        total_gt = len(ground_truth)
+        recall = true_positives / total_gt if total_gt > 0 else np.nan
+        metrics_acc['recall'] = recall
+
+        # F1 Score (based on Top-1 Accuracy and overall recall)
+        precision_at_1_by_sample = ranking_metrics.get('top_rank_percentage', 0) / 100
+        if not np.isnan(recall) and precision_at_1_by_sample + recall > 0:
+            metrics_acc['f1_score'] = 2 * (precision_at_1_by_sample * recall) / (precision_at_1_by_sample + recall)
+        else:
+            metrics_acc['f1_score'] = np.nan
+        
+        # ROC/AUC Calculation
+        metrics_acc['auc'] = np.nan
+        all_scores, all_labels = [], []
+        max_length = self.max_rank_length
+
+        if max_length > 0:
             for sample_id, true_gene in ground_truth.items():
                 if sample_id in rankings:
                     ranked_genes = rankings[sample_id]
-                    # Take top k genes (or all if less than k)
-                    top_k_genes = ranked_genes[:min(threshold, len(ranked_genes))]
-                    
-                    total_predictions += len(top_k_genes)
-                    if true_gene in top_k_genes:
-                        true_positives += 1
-            
-            if total_predictions > 0:
-                precision = true_positives / total_predictions
-            else:
-                precision = 0.0
+                    for i, gene in enumerate(ranked_genes):
+                        all_scores.append(max_length - i)
+                        all_labels.append(1 if gene == true_gene else 0)
+                    if true_gene not in ranked_genes:
+                        all_scores.append(0)
+                        all_labels.append(1)
+                else:
+                    all_scores.append(0)
+                    all_labels.append(1)
+
+            if len(all_labels) > 0 and len(set(all_labels)) > 1:
+                fpr, tpr, _ = metrics.roc_curve(all_labels, all_scores)
+                metrics_acc['auc'] = metrics.auc(fpr, tpr)
                 
-            metrics[f'precision_at_{threshold}'] = precision
+        return metrics_acc
+
+    def _calculate_distribution_metrics(self, rankings):
+        """Calculate rank distribution and data for ECDF."""
+        metrics_dist = {}
+        ground_truth = {row['Sample id']: row['hgnc_gene'] for _, row in self.manual_data.iterrows()}
         
-        true_positives = 0
-        false_negatives = 0
+        categories = ['1st', '2-5', '6-10', '>10', 'Not Found']
+        counts = {cat: 0 for cat in categories}
+        total_samples = len(ground_truth)
+        ecdf_ranks = []
+
         for sample_id, true_gene in ground_truth.items():
             if sample_id in rankings:
                 ranked_genes = rankings[sample_id]
                 if true_gene in ranked_genes:
-                    true_positives += 1
+                    rank = ranked_genes.index(true_gene) + 1
+                    ecdf_ranks.append(rank)
+                    if rank == 1: counts['1st'] += 1
+                    elif 2 <= rank <= 5: counts['2-5'] += 1
+                    elif 6 <= rank <= 10: counts['6-10'] += 1
+                    else: counts['>10'] += 1
                 else:
-                    false_negatives += 1
-        if true_positives + false_negatives > 0:
-            recall = true_positives / (true_positives + false_negatives)
-        else:
-            recall = np.nan
-        metrics['recall'] = recall
+                    counts['Not Found'] += 1
+                    ecdf_ranks.append(len(ranked_genes) + 1) 
+            else:
+                counts['Not Found'] += 1
+                ecdf_ranks.append(total_samples + 1) 
+
+        metrics_dist['rank_distribution_counts'] = counts
+        metrics_dist['rank_distribution_percentage'] = {k: (v / total_samples * 100) if total_samples > 0 else 0 for k, v in counts.items()}
+        metrics_dist['ecdf_ranks'] = ecdf_ranks
         
-        true_negatives = 0
-        false_positives = 0
-        for sample_id, true_gene in ground_truth.items():
-            if sample_id in rankings:
-                ranked_genes = rankings[sample_id]
-                true_negatives += len(set(self.acmg_filtered['hgnc_gene'].unique()) - set(ranked_genes))
-                false_positives += len(ranked_genes) - (1 if true_gene in ranked_genes else 0)
-        if true_negatives + false_positives > 0:
-            specificity = true_negatives / (true_negatives + false_positives)
-        else:
-            specificity = np.nan
-        metrics['specificity'] = specificity
-        
-        if recall + metrics['precision_at_1'] > 0:
-            f1 = 2 * (metrics['precision_at_1'] * recall) / (metrics['precision_at_1'] + recall)
-        else:
-            f1 = np.nan
-        metrics['f1_score'] = f1
-        
-        return metrics
+        return metrics_dist
 
     def perform_statistical_tests(self):
-        """Perform statistical tests without generating individual visualizations."""
+        """Perform statistical tests (Bootstrap and Friedman) and store results."""
         print(f"Performing statistical tests for {self.analysis_type} analysis...")
         
-        self.statistical_tests = {
-            'bootstrap_ci': {},
-            'friedman_test': {},
-            'nemenyi_test': {},
-            'fisher_exact': {}
-        }
-        
+        self.statistical_tests = {'bootstrap_ci': {}, 'friedman_test': {}}
         tools = list(self.tool_data.keys())
         ground_truth = {row['Sample id']: row['hgnc_gene'] for _, row in self.manual_data.iterrows()}
-        sample_ids = sorted(list(set(ground_truth.keys()) & set().union(*[set(self.tool_data[t].keys()) for t in tools])))
+        sample_ids = sorted(list(ground_truth.keys()))
         n_samples = len(sample_ids)
-        print(f"Samples for statistical tests: {n_samples}")
-        
-        if n_samples < 10:
-            print("Warning: Small sample size (<10) may affect test reliability")
-        
-        # Bootstrap Confidence Intervals
-        print("Calculating bootstrap CIs for Top-1, Top-5, Top-10...")
+
+        # --- Bootstrap Confidence Intervals ---
         n_resamples = 1000
         metrics_list = ['top_rank_percentage', 'top_5_percentage', 'top_10_percentage']
         
         for tool in tools:
             self.statistical_tests['bootstrap_ci'][tool] = {}
             for metric in metrics_list:
-                samples = []
                 threshold = 1 if metric == 'top_rank_percentage' else int(metric.split('_')[1])
-                for sample_id, true_gene in ground_truth.items():
+                samples_binary = []
+                for sample_id in sample_ids:
+                    found = False
                     if sample_id in self.tool_data[tool]:
                         ranked_genes = self.tool_data[tool][sample_id]
-                        found = true_gene in ranked_genes and ranked_genes.index(true_gene) < threshold
-                        samples.append(1 if found else 0)
+                        if ground_truth[sample_id] in ranked_genes and ranked_genes.index(ground_truth[sample_id]) < threshold:
+                            found = True
+                    samples_binary.append(1 if found else 0)
                 
-                if len(samples) < 5:
-                    print(f"Warning: Too few samples ({len(samples)}) for {tool} {metric} CI")
+                if len(samples_binary) < 5:
                     self.statistical_tests['bootstrap_ci'][tool][metric] = {'lower': np.nan, 'upper': np.nan, 'mean': np.nan}
                     continue
                 
-                bootstrap_results = [np.mean(resample(samples)) * 100 for _ in range(n_resamples)]
+                bootstrap_results = [np.mean(resample(samples_binary)) * 100 for _ in range(n_resamples)]
                 lower, upper = np.percentile(bootstrap_results, [2.5, 97.5])
-                self.statistical_tests['bootstrap_ci'][tool][metric] = {
-                    'lower': lower,
-                    'upper': upper,
-                    'mean': np.mean(bootstrap_results)
-                }
-        
-        # Friedman & Nemenyi Tests
-        print("Performing Friedman and Nemenyi tests...")
+                self.statistical_tests['bootstrap_ci'][tool][metric] = {'lower': lower, 'upper': upper, 'mean': np.mean(bootstrap_results)}
+
+        # --- Friedman Test ---
         if n_samples >= 5 and len(tools) >= 2:
             rank_matrix = []
+            max_rank_penalty = n_samples + 1 # Penalty for not processing a sample
             for sample_id in sample_ids:
                 sample_ranks = []
                 for tool in tools:
@@ -674,1011 +506,438 @@ class VariantToolBenchmarker:
                         ranked_genes = self.tool_data[tool][sample_id]
                         rank = ranked_genes.index(ground_truth[sample_id]) + 1 if ground_truth[sample_id] in ranked_genes else len(ranked_genes) + 1
                     else:
-                        avg_rank = np.mean([len(self.tool_data[tool].get(sid, [])) + 1 
-                                          for sid in self.tool_data[tool].keys() 
-                                          if ground_truth.get(sid) not in self.tool_data[tool].get(sid, [])])
-                        rank = avg_rank if not np.isnan(avg_rank) else 1000
+                        rank = max_rank_penalty 
                     sample_ranks.append(rank)
                 rank_matrix.append(sample_ranks)
             
             rank_matrix = np.array(rank_matrix)
+            
             try:
                 statistic, p_value = friedmanchisquare(*rank_matrix.T)
-                self.statistical_tests['friedman_test'] = {
-                    'statistic': statistic,
-                    'p_value': p_value,
-                    'significant': p_value < 0.05
-                }
+                self.statistical_tests['friedman_test'] = {'statistic': statistic, 'p_value': p_value, 'rank_matrix': rank_matrix}
                 print(f"Friedman test: statistic={statistic:.2f}, p-value={p_value:.4f}")
-                
-                if p_value < 0.05:
-                    nemenyi_result = sp.posthoc_nemenyi_friedman(rank_matrix)
-                    self.statistical_tests['nemenyi_test'] = {'matrix': nemenyi_result, 'tool_pairs': {}}
-                    for i, tool1 in enumerate(tools):
-                        for j, tool2 in enumerate(tools):
-                            if i < j:
-                                p_val = nemenyi_result.iloc[i, j]
-                                self.statistical_tests['nemenyi_test']['tool_pairs'][(tool1, tool2)] = {
-                                    'p_value': p_val,
-                                    'significant': p_val < 0.05
-                                }
-                                if p_val < 0.05:
-                                    print(f"Significant difference: {tool1} vs {tool2}, p={p_val:.4f}")
             except Exception as e:
                 print(f"Friedman test error: {e}")
+                self.statistical_tests['friedman_test'] = {'p_value': np.nan, 'rank_matrix': None}
         else:
             print("Need >=5 samples and >=2 tools for Friedman test")
-        
-        # Fisher's Exact Test
-        print("Performing Fisher's exact test with Bonferroni correction...")
-        self.statistical_tests['fisher_exact'] = {'top_1': {}, 'top_5': {}, 'top_10': {}}
-        thresholds = [1, 5, 10]
-        keys = ['top_1', 'top_5', 'top_10']
-        all_p_values = []
-        all_pairs = []
-        
-        for threshold, key in zip(thresholds, keys):
-            for i, tool1 in enumerate(tools):
-                for j, tool2 in enumerate(tools):
-                    if i < j:
-                        table = np.zeros((2, 2), dtype=int)
-                        count = 0
-                        for sample_id, true_gene in ground_truth.items():
-                            if sample_id in self.tool_data[tool1] and sample_id in self.tool_data[tool2]:
-                                found1 = true_gene in self.tool_data[tool1][sample_id] and self.tool_data[tool1][sample_id].index(true_gene) < threshold
-                                found2 = true_gene in self.tool_data[tool2][sample_id] and self.tool_data[tool2][sample_id].index(true_gene) < threshold
-                                table[int(found1), int(found2)] += 1
-                                count += 1
-                        
-                        if count < 10:
-                            print(f"Warning: Low sample count ({count}) for {tool1} vs {tool2} at top-{threshold}")
-                        if np.sum(table) == 0:
-                            continue
-                        
-                        try:
-                            odds_ratio, p_value = fisher_exact(table)
-                            all_p_values.append(p_value)
-                            all_pairs.append((tool1, tool2, threshold, key, table, odds_ratio))
-                        except Exception as e:
-                            print(f"Fisher's test error for {tool1} vs {tool2}: {e}")
-        
-        if all_p_values:
-            corrected_p = multipletests(all_p_values, method='bonferroni')[1]
-            for (tool1, tool2, threshold, key, table, odds_ratio), p in zip(all_pairs, corrected_p):
-                tool1_acc = self.metrics[tool1]['ranking'].get('top_rank_percentage' if threshold == 1 else f'top_{threshold}_percentage', 0)
-                tool2_acc = self.metrics[tool2]['ranking'].get('top_rank_percentage' if threshold == 1 else f'top_{threshold}_percentage', 0)
-                better = tool1 if tool1_acc > tool2_acc else tool2
-                self.statistical_tests['fisher_exact'][key][(tool1, tool2)] = {
-                    'odds_ratio': odds_ratio,
-                    'p_value': p,
-                    'significant': p < 0.05,
-                    'contingency_table': table.tolist(),
-                    'better_tool': better
-                }
-                if p < 0.05:
-                    print(f"Significant: top-{threshold}, {tool1} vs {tool2}, corrected p={p:.4f}, {better} better")
-
-    def calculate_auc(self):
-        """Calculate corrected AUC for each tool that penalizes filtered-out genes."""
-        print(f"Calculating corrected AUC for each tool ({self.analysis_type} analysis)...")
-        
-        ground_truth = {row['Sample id']: row['hgnc_gene'] for _, row in self.manual_data.iterrows()}
-        self.auc_results = {}
-        
-        for tool, rankings in self.tool_data.items():
-            print(f"Calculating AUC for {tool}...")
-            
-            all_scores = []
-            all_labels = []
-            
-            # First pass: determine maximum list length across all samples for this tool
-            max_length = 0
-            for sample_id in ground_truth.keys():
-                if sample_id in rankings:
-                    max_length = max(max_length, len(rankings[sample_id]))
-            
-            # If no data for this tool, skip
-            if max_length == 0:
-                self.auc_results[tool] = np.nan
-                continue
-            
-            for sample_id, true_gene in ground_truth.items():
-                if sample_id in rankings:
-                    ranked_genes = rankings[sample_id]
-                    
-                    # Process all genes in the ranking
-                    for i, gene in enumerate(ranked_genes):
-                        score = max_length - i  # Higher rank = higher score
-                        label = 1 if gene == true_gene else 0
-                        all_scores.append(score)
-                        all_labels.append(label)
-                    
-                    # CRITICAL: If causative gene is not in the ranking (filtered out),
-                    # assign it the worst possible score (0)
-                    if true_gene not in ranked_genes:
-                        all_scores.append(0)  # Worst score for filtered-out gene
-                        all_labels.append(1)  # This IS the causative gene
-            
-            # Calculate AUC if we have both positive and negative cases
-            if len(set(all_labels)) == 2 and len(all_scores) > 0:
-                try:
-                    auc_score = metrics.roc_auc_score(all_labels, all_scores)
-                    self.auc_results[tool] = auc_score
-                    print(f"  {tool}: AUC = {auc_score:.4f}")
-                except Exception as e:
-                    print(f"  Error calculating AUC for {tool}: {e}")
-                    self.auc_results[tool] = np.nan
-            else:
-                print(f"  Cannot calculate AUC for {tool}: insufficient data")
-                self.auc_results[tool] = np.nan
-        
-        print("Corrected AUC calculation complete.")
+            self.statistical_tests['friedman_test'] = {'p_value': np.nan, 'rank_matrix': None}
 
     def generate_report(self, output_file='benchmark_report.txt'):
-        """
-        Generate a comprehensive report of the results.
-        
-        Parameters:
-        -----------
-        output_file : str
-            Path to save the report
-        """
-        print("Generating report...")
+        """Generate a comprehensive report of the results."""
+        print(f"Generating comprehensive report and saving to {output_file}")
         
         with open(output_file, 'w') as f:
-            f.write("========================================================\n")
-            f.write(f"   VARIANT CLASSIFICATION TOOLS BENCHMARKING REPORT ({self.analysis_type.upper()})    \n")
-            f.write("========================================================\n\n")
+            f.write("="*80 + "\n")
+            f.write(f"  VARIANT CLASSIFICATION BENCHMARKING REPORT ({self.analysis_type.upper()})\n")
+            f.write("="*80 + "\n\n")
             
-            # Summary of tools analyzed
-            f.write("TOOLS ANALYZED\n")
-            f.write("-------------\n")
-            for tool in self.tool_data.keys():
+            sorted_tools = sorted(self.tool_data.keys(), key=lambda t: self.metrics[t]['ranking'].get('top_10_percentage', 0), reverse=True)
+            f.write("TOOLS ANALYZED\n" + "-"*15 + "\n")
+            for tool in sorted_tools:
                 f.write(f"- {tool}\n")
             f.write("\n")
             
-            # Ranking Metrics
-            f.write("RANKING METRICS\n")
-            f.write("--------------\n")
-            metrics = ['Top-Rank %', 'Top-5 %', 'Top-10 %', 'Top-20 %', 'Mean Rank', 'Median Rank']
-            f.write(f"{'Tool':<15}")
-            for metric in metrics:
-                f.write(f"{metric:<15}")
+            # --- Main Performance Table ---
+            f.write("OVERALL PERFORMANCE METRICS\n" + "-"*30 + "\n")
+            headers = ['Tool', 'Top-1 %', 'Top-5 %', 'Top-10 %', 'Top-50 %', 'Retention %', 'Mean Rank', 'Median Rank', 'AUC']
+            f.write(f"{headers[0]:<12}{headers[1]:<10}{headers[2]:<10}{headers[3]:<10}{headers[4]:<10}{headers[5]:<12}{headers[6]:<12}{headers[7]:<14}{headers[8]:<10}\n")
+            f.write("-" * 100 + "\n")
+
+            for tool in sorted_tools:
+                ranking = self.metrics[tool]['ranking']
+                filtering = self.metrics[tool]['filtering']
+                accuracy = self.metrics[tool]['accuracy']
+                
+                top1 = ranking.get('top_rank_percentage', 0)
+                top5 = ranking.get('top_5_percentage', 0)
+                top10 = ranking.get('top_10_percentage', 0)
+                top50 = ranking.get('top_50_percentage', 0)
+                retention = filtering.get('retention_rate', 0)
+                mean_r = ranking.get('mean_rank', np.nan)
+                median_r = ranking.get('median_rank', np.nan)
+                auc = accuracy.get('auc', np.nan)
+
+                f.write(f"{tool:<12}{top1:<10.2f}{top5:<10.2f}{top10:<10.2f}{top50:<10.2f}{retention:<12.2f}{f'{mean_r:.2f}':<12}{f'{median_r:.2f}':<14}{f'{auc:.3f}':<10}\n")
             f.write("\n")
-            f.write("-" * (15 * (len(metrics) + 1)) + "\n")
-            for tool in self.tool_data.keys():
-                f.write(f"{tool:<15}")
-                value = self.metrics[tool]['ranking'].get('top_rank_percentage', np.nan)
-                f.write(f"{value:,.2f}%{' ' * 8}")
-                value = self.metrics[tool]['ranking'].get('top_5_percentage', np.nan)
-                f.write(f"{value:,.2f}%{' ' * 8}")
-                value = self.metrics[tool]['ranking'].get('top_10_percentage', np.nan)
-                f.write(f"{value:,.2f}%{' ' * 8}")
-                value = self.metrics[tool]['ranking'].get('top_20_percentage', np.nan)
-                f.write(f"{value:,.2f}%{' ' * 8}")
-                value = self.metrics[tool]['ranking'].get('mean_rank', np.nan)
-                f.write(f"{value:,.2f}{' ' * 10}")
-                value = self.metrics[tool]['ranking'].get('median_rank', np.nan)
-                f.write(f"{value:,.2f}{' ' * 10}")
+
+            # --- Rank Distribution Table ---
+            f.write("RANK DISTRIBUTION (% of Cases)\n" + "-"*30 + "\n")
+            dist_headers = ['Tool', 'Rank 1', 'Rank 2-5', 'Rank 6-10', 'Rank >10', 'Not Found']
+            f.write(f"{dist_headers[0]:<12}{dist_headers[1]:<12}{dist_headers[2]:<12}{dist_headers[3]:<12}{dist_headers[4]:<12}{dist_headers[5]:<12}\n")
+            f.write("-" * 72 + "\n")
+            for tool in sorted_tools:
+                dist_pct = self.metrics[tool]['distribution']['rank_distribution_percentage']
+                f.write(f"{tool:<12}{dist_pct['1st']:<12.2f}{dist_pct['2-5']:<12.2f}{dist_pct['6-10']:<12.2f}{dist_pct['>10']:<12.2f}{dist_pct['Not Found']:<12.2f}\n")
+            f.write("\n")
+
+            # --- Cumulative Probability Table (ECDF data) ---
+            f.write("CUMULATIVE PROBABILITY (ECDF) (% of Cases)\n" + "-"*45 + "\n")
+            ecdf_headers = ['Tool', 'Rank <= 1', 'Rank <= 5', 'Rank <= 10', 'Rank <= 50']
+            f.write(f"{ecdf_headers[0]:<12}{ecdf_headers[1]:<12}{ecdf_headers[2]:<12}{ecdf_headers[3]:<12}{ecdf_headers[4]:<12}\n")
+            f.write("-" * 60 + "\n")
+            for tool in sorted_tools:
+                ranks = np.array(self.metrics[tool]['distribution'].get('ecdf_ranks', []))
+                f.write(f"{tool:<12}")
+                if len(ranks) > 0:
+                    for threshold in [1, 5, 10, 50]:
+                        prob = (np.sum(ranks <= threshold) / len(ranks)) * 100
+                        f.write(f"{prob:<12.2f}")
+                else:
+                    f.write(f"{'N/A':<12}"*4)
                 f.write("\n")
             f.write("\n")
-            
-            # Filtering Performance
-            f.write("FILTERING PERFORMANCE\n")
-            f.write("--------------------\n")
-            metrics = ['Filtered-Out Rate', 'Retention Rate']
-            f.write(f"{'Tool':<15}")
-            for metric in metrics:
-                f.write(f"{metric:<20}")
+
+            # --- Precision and F1 Score Table ---
+            f.write("PRECISION & F1 SCORE\n" + "-"*30 + "\n")
+            prec_headers = ['Tool', 'P@1', 'P@5', 'P@10', 'Recall', 'F1 Score']
+            f.write(f"{prec_headers[0]:<12}{prec_headers[1]:<10}{prec_headers[2]:<10}{prec_headers[3]:<10}{prec_headers[4]:<10}{prec_headers[5]:<10}\n")
+            f.write("-" * 62 + "\n")
+            for tool in sorted_tools:
+                accuracy = self.metrics[tool]['accuracy']
+                p1 = accuracy.get('precision_at_1', np.nan)
+                p5 = accuracy.get('precision_at_5', np.nan)
+                p10 = accuracy.get('precision_at_10', np.nan)
+                recall = accuracy.get('recall', np.nan)
+                f1 = accuracy.get('f1_score', np.nan)
+                f.write(f"{tool:<12}{p1:<10.3f}{p5:<10.3f}{p10:<10.3f}{recall:<10.3f}{f1:<10.3f}\n")
             f.write("\n")
-            f.write("-" * (15 + 20 * len(metrics)) + "\n")
-            for tool in self.tool_data.keys():
-                f.write(f"{tool:<15}")
-                value = self.metrics[tool]['filtering'].get('filtered_out_rate', np.nan)
-                f.write(f"{value:,.2f}%{' ' * 13}")
-                value = self.metrics[tool]['filtering'].get('retention_rate', np.nan)
-                f.write(f"{value:,.2f}%{' ' * 13}")
-                f.write("\n")
-            f.write("\n")
-            
-            # Accuracy Metrics
-            f.write("ACCURACY METRICS\n")
-            f.write("---------------\n")
-            metrics = ['Precision@1', 'Precision@10', 'Recall', 'F1 Score']
-            f.write(f"{'Tool':<15}")
-            for metric in metrics:
-                f.write(f"{metric:<15}")
-            f.write("\n")
-            f.write("-" * (15 * (len(metrics) + 1)) + "\n")
-            for tool in self.tool_data.keys():
-                f.write(f"{tool:<15}")
-                value = self.metrics[tool]['accuracy'].get('precision_at_1', np.nan)
-                f.write(f"{value:,.4f}{' ' * 8}")
-                value = self.metrics[tool]['accuracy'].get('precision_at_10', np.nan)
-                f.write(f"{value:,.4f}{' ' * 8}")
-                value = self.metrics[tool]['accuracy'].get('recall', np.nan)
-                f.write(f"{value:,.4f}{' ' * 8}")
-                value = self.metrics[tool]['accuracy'].get('f1_score', np.nan)
-                f.write(f"{value:,.4f}{' ' * 8}")
-                f.write("\n")
-            f.write("\n")
-            
-            # AUC Results
-            if hasattr(self, 'auc_results'):
-                f.write("AUC SCORES\n")
-                f.write("----------\n")
-                f.write(f"{'Tool':<15}{'AUC Score':<15}\n")
-                f.write("-" * 30 + "\n")
-                sorted_tools = sorted(self.auc_results.items(), key=lambda x: x[1] if not np.isnan(x[1]) else 0, reverse=True)
-                for tool, auc_score in sorted_tools:
-                    if np.isnan(auc_score):
-                        f.write(f"{tool:<15}{'N/A':<15}\n")
-                    else:
-                        f.write(f"{tool:<15}{auc_score:<15.4f}\n")
-                f.write("\n")
-            
-            # Add statistical tests
+
+            # Statistical Tests
             self.update_report_with_statistics(f)
-            
-            # Conclusion
-            f.write("CONCLUSION\n")
-            f.write("----------\n")
-            f.write("Based on the benchmarking metrics, the tools can be ranked as follows:\n\n")
-            tool_ranking = {tool: self.metrics[tool]['ranking'].get('top_10_percentage', 0) for tool in self.tool_data.keys()}
-            sorted_tools = sorted(tool_ranking.items(), key=lambda x: x[1], reverse=True)
-            for i, (tool, value) in enumerate(sorted_tools):
-                f.write(f"{i+1}. {tool} (Top-10: {value:.2f}%)\n")
-            f.write("\nRecommendations:\n")
-            if 'cpsr' in self.tool_data and 'LIRICAL' in self.tool_data:
-                f.write("1. For cancer samples, CPSR should be the first-line tool, with LIRICAL as complement\n")
-                f.write("2. For non-cancer samples, LIRICAL should be the primary tool\n")
-            elif 'LIRICAL' in self.tool_data:
-                f.write("1. LIRICAL shows the strongest overall performance across metrics\n")
-            f.write("3. Consider using multiple tools in combination to maximize variant identification\n")
-            f.write("4. For specific applications, consider the strengths of each tool highlighted in this report\n")
-            f.write("5. Franklin performs well at finding pathogenic variants but may need alternative ranking metrics\n")
-        
-        print(f"Report generated and saved to {output_file}")
 
     def update_report_with_statistics(self, f):
-        """
-        Update the report with statistical test results, including bootstrap CIs for top-1, top-5, top-10.
+        """Update the report with statistical test results."""
+        f.write("STATISTICAL TESTS\n" + "-"*20 + "\n")
         
-        Parameters:
-        -----------
-        f : file object
-            The open file to write the report to
-        """
-        f.write("STATISTICAL TESTS\n")
-        f.write("----------------\n")
-    
         # Friedman Test
-        if 'friedman_test' in self.statistical_tests:
-            f.write("Friedman Test Results (Ranking Performance):\n")
+        if 'friedman_test' in self.statistical_tests and self.statistical_tests['friedman_test'].get('p_value') is not None:
             friedman = self.statistical_tests['friedman_test']
-            f.write(f"  Statistic: {friedman.get('statistic', 'N/A'):.4f}\n")
-            f.write(f"  p-value: {friedman.get('p_value', 'N/A'):.4f}\n")
-            f.write(f"  Significant: {'Yes' if friedman.get('significant', False) else 'No'}\n\n")
-    
-        # Nemenyi Post-hoc Test
-        if 'nemenyi_test' in self.statistical_tests and 'tool_pairs' in self.statistical_tests['nemenyi_test']:
-            f.write("Nemenyi Post-hoc Test Results (Ranking Performance):\n")
-            significant_pairs = [(t1, t2, data['p_value']) for (t1, t2), data in 
-                                self.statistical_tests['nemenyi_test']['tool_pairs'].items() 
-                                if data['significant']]
-            if significant_pairs:
-                f.write("  Significant tool pairs:\n")
-                for t1, t2, p_val in sorted(significant_pairs, key=lambda x: x[2]):
-                    tool1_acc = self.metrics[t1]['ranking'].get('top_rank_percentage', 0)
-                    tool2_acc = self.metrics[t2]['ranking'].get('top_rank_percentage', 0)
-                    better_tool = t1 if tool1_acc > tool2_acc else t2
-                    f.write(f"    {t1} vs {t2}: p-value={p_val:.4f}, {better_tool} performs better\n")
+            if not np.isnan(friedman.get('p_value')):
+                f.write("Friedman Test (Overall Ranking Performance):\n")
+                f.write(f"  Statistic: {friedman.get('statistic', 'N/A'):.4f}\n")
+                f.write(f"  p-value: {friedman.get('p_value', 'N/A'):.4f}\n")
+                f.write(f"  Significant difference among tools: {'Yes' if friedman.get('p_value') < 0.05 else 'No'}\n\n")
             else:
-                f.write("  No significant differences found between tool pairs.\n")
-            f.write("\n")
-    
-        # Fisher's Exact Test
-        if 'fisher_exact' in self.statistical_tests:
-            f.write("Fisher's Exact Test Results:\n")
-            for threshold, label in [('top_1', 'Top-1'), ('top_5', 'Top-5'), ('top_10', 'Top-10')]:
-                if threshold in self.statistical_tests['fisher_exact']:
-                    f.write(f"  {label} Comparison:\n")
-                    significant_pairs = [(t1, t2, data['p_value'], data['odds_ratio']) 
-                                        for (t1, t2), data in self.statistical_tests['fisher_exact'][threshold].items() 
-                                        if data['significant']]
-                    if significant_pairs:
-                        f.write("    Significant tool pairs:\n")
-                        for t1, t2, p_val, odds in sorted(significant_pairs, key=lambda x: x[2]):
-                            better_tool = t1 if odds > 1 else t2
-                            f.write(f"      {t1} vs {t2}: p-value={p_val:.4f}, {better_tool} performs better\n")
-                    else:
-                        f.write("    No significant differences found.\n")
-            f.write("\n")
-    
+                f.write("  Friedman test could not be performed (insufficient data).\n\n")
+
         # Bootstrap Confidence Intervals
         if 'bootstrap_ci' in self.statistical_tests:
-            f.write("Bootstrap 95% Confidence Intervals:\n")
+            f.write("Bootstrap 95% Confidence Intervals (Top-N Accuracy):\n")
             f.write(f"{'Tool':<15}{'Top-1 (%)':<25}{'Top-5 (%)':<25}{'Top-10 (%)':<25}\n")
-            f.write("-" * 100 + "\n")
-            for tool in sorted(self.tool_data.keys()):
+            f.write("-" * 90 + "\n")
+            sorted_tools = sorted(self.tool_data.keys(), key=lambda t: self.metrics[t]['ranking'].get('top_10_percentage', 0), reverse=True)
+            for tool in sorted_tools:
                 if tool in self.statistical_tests['bootstrap_ci']:
                     ci_data = self.statistical_tests['bootstrap_ci'][tool]
                     f.write(f"{tool:<15}")
                     for metric in ['top_rank_percentage', 'top_5_percentage', 'top_10_percentage']:
-                        if metric in ci_data:
+                        if metric in ci_data and 'mean' in ci_data[metric]:
                             data = ci_data[metric]
-                            f.write(f"{data['mean']:.2f} ({data['lower']:.2f}-{data['upper']:.2f}){' '*(25-13)}")
+                            f.write(f"{data['mean']:.2f} ({data['lower']:.2f}-{data['upper']:.2f}){' ':<8}")
                         else:
-                            f.write(f"N/A{' '*(25-13)}")
+                            f.write(f"{'N/A':<25}")
                     f.write("\n")
             f.write("\n")
 
 
-def generate_combined_panels(benchmarker_all, benchmarker_cancer, output_dir='combined_panels'):
-    """Generate combined panel figures from two benchmarker instances."""
+def generate_figures(benchmarker, output_dir='publication_figures'):
+    """Generate the final set of journal-compliant figures for the unified analysis."""
     
     os.makedirs(output_dir, exist_ok=True)
     
-    # Define tool colors for consistency
+    # --- Setup: Colors and Data ---
     tool_colors = {
-        'franklin': '#1f77b4',
-        'Franklin': '#1f77b4',
-        'genebe': '#ff7f0e',
-        'Genebe': '#ff7f0e',
-        'intervar': '#2ca02c',
-        'Intervar': '#2ca02c',
-        'InterVar': '#2ca02c',
-        'tapes': '#d62728',
-        'TAPES': '#d62728',
-        'lirical': '#9467bd',
-        'LIRICAL': '#9467bd',
-        'cpsr': '#8c564b',
-        'CPSR': '#8c564b'
+        'franklin': '#1f77b4', 'Franklin': '#1f77b4',
+        'genebe': '#ff7f0e',   'Genebe': '#ff7f0e',
+        'intervar': '#2ca02c', 'Intervar': '#2ca02c', 'InterVar': '#2ca02c',
+        'tapes': '#d62728',    'TAPES': '#d62728',
+        'lirical': '#9467bd',  'LIRICAL': '#9467bd',
+        'cpsr': '#8c564b',     'CPSR': '#8c564b'
     }
+    ground_truth = {row['Sample id']: row['hgnc_gene'] for _, row in benchmarker.manual_data.iterrows()}
     
-    # Get ground truth for both analyses
-    ground_truth_all = {row['Sample id']: row['hgnc_gene'] for _, row in benchmarker_all.manual_data.iterrows()}
-    ground_truth_cancer = {row['Sample id']: row['hgnc_gene'] for _, row in benchmarker_cancer.manual_data.iterrows()}
+    all_tools = list(benchmarker.tool_data.keys())
+    tool_order = ['Franklin', 'Genebe', 'Intervar', 'TAPES', 'LIRICAL']
+    tool_order = [t for t in tool_order if t in all_tools]
+
+    tool_labels = {
+        t: t.upper() if t.lower() in ['lirical', 'tapes'] else t.capitalize() 
+        for t in all_tools
+    }
+
+    # =============================================================================
+    # Figure 1: Performance Overview
+    # =============================================================================
+    print("Generating Figure 1: Performance Overview...")
+    fig = plt.figure(figsize=(COLUMN_WIDTH_INCHES, COLUMN_WIDTH_INCHES))
     
-    # Figure 1: Radar plots and ranking accuracy
-    print("Generating Figure 1: Performance overview...")
-    fig1 = plt.figure(figsize=(20, 10))
-    
-    # Panel A: Radar plot for all samples
-    ax1 = fig1.add_subplot(2, 2, 1, polar=True)
-    tools_all = list(benchmarker_all.tool_data.keys())
-    metrics_radar = ['Top-1 Accuracy (%)', 'Top-5 Accuracy (%)', 'Top-10 Accuracy (%)', 'Accuracy (%)']
+    gs = fig.add_gridspec(2, 2, hspace=0.7, wspace=0.5) 
+    axA = fig.add_subplot(gs[0, 0], polar=True)
+    axB = fig.add_subplot(gs[0, 1])
+    axC = fig.add_subplot(gs[1, 0])
+    axD = fig.add_subplot(gs[1, 1])
+
+    # --- Panel A: Radar plot (with Top-50) ---
+    metrics_radar = ['Top-1 %', 'Top-10 %', 'Top-50 %', 'Recall (%)']
     N = len(metrics_radar)
-    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
-    angles += angles[:1]
-    ax1.set_theta_offset(np.pi / 2)
-    ax1.set_theta_direction(-1)
-    ax1.set_xticks(angles[:-1])
-    ax1.set_xticklabels(metrics_radar)
-    ax1.set_ylim(0, 100)
-    
-    for tool in tools_all:
+    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist() + [0]
+    axA.set_theta_offset(np.pi / 2)
+    axA.set_theta_direction(-1)
+    axA.set_xticks(angles[:-1])
+    axA.set_xticklabels(metrics_radar, fontsize=5)
+    axA.set_ylim(0, 100)
+    for tool in tool_order:
         values = [
-            benchmarker_all.metrics[tool]['ranking'].get('top_rank_percentage', 0),
-            benchmarker_all.metrics[tool]['ranking'].get('top_5_percentage', 0),
-            benchmarker_all.metrics[tool]['ranking'].get('top_10_percentage', 0),
-            benchmarker_all.metrics[tool]['accuracy'].get('recall', 0) * 100
-        ]
-        values += values[:1]
-        ax1.plot(angles, values, linewidth=2, linestyle='solid', label=tool, color=tool_colors.get(tool, None))
-        ax1.fill(angles, values, alpha=0.1, color=tool_colors.get(tool, None))
-    
-    ax1.set_title('A', loc='left', fontweight='bold', fontsize=20)
-    ax1.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1), frameon=True, fancybox=True, shadow=True)
-    
-    # Panel B: Radar plot for cancer samples
-    ax2 = fig1.add_subplot(2, 2, 2, polar=True)
-    tools_cancer = list(benchmarker_cancer.tool_data.keys())
-    ax2.set_theta_offset(np.pi / 2)
-    ax2.set_theta_direction(-1)
-    ax2.set_xticks(angles[:-1])
-    ax2.set_xticklabels(metrics_radar)
-    ax2.set_ylim(0, 100)
-    
-    for tool in tools_cancer:
-        values = [
-            benchmarker_cancer.metrics[tool]['ranking'].get('top_rank_percentage', 0),
-            benchmarker_cancer.metrics[tool]['ranking'].get('top_5_percentage', 0),
-            benchmarker_cancer.metrics[tool]['ranking'].get('top_10_percentage', 0),
-            benchmarker_cancer.metrics[tool]['accuracy'].get('recall', 0) * 100
-        ]
-        values += values[:1]
-        ax2.plot(angles, values, linewidth=2, linestyle='solid', label=tool, color=tool_colors.get(tool, None))
-        ax2.fill(angles, values, alpha=0.1, color=tool_colors.get(tool, None))
-    
-    ax2.set_title('B', loc='left', fontweight='bold', fontsize=20)
-    ax2.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1), frameon=True, fancybox=True, shadow=True)
-    
-    # Panel C: Ranking accuracy for all samples
-    ax3 = fig1.add_subplot(2, 2, 3)
+            benchmarker.metrics[tool]['ranking'].get('top_rank_percentage', 0),
+            benchmarker.metrics[tool]['ranking'].get('top_10_percentage', 0),
+            benchmarker.metrics[tool]['ranking'].get('top_50_percentage', 0),
+            benchmarker.metrics[tool]['accuracy'].get('recall', 0) * 100
+        ] + [benchmarker.metrics[tool]['ranking'].get('top_rank_percentage', 0)]
+        axA.plot(angles, values, linewidth=1.2, linestyle='solid', label=tool_labels[tool], color=tool_colors.get(tool, None), marker='o', markersize=2, alpha=0.8)
+        axA.fill(angles, values, alpha=0.2, color=tool_colors.get(tool, None))
+    add_panel_label(axA, 'A')
+    axA.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(tool_order), fontsize=5, frameon=True)
+
+    # --- Panel B: Top-N Ranking Accuracy (with Top-50 and labels) ---
     thresholds = [1, 5, 10, 20, 50]
     colors = ['#66c2a5', '#fc8d62', '#8da0cb', '#e78ac3', '#a6d854']
-    accuracy_data = np.zeros((len(tools_all), len(thresholds)))
-    for i, tool in enumerate(tools_all):
-        for j, threshold in enumerate(thresholds):
-            metric_name = f'top_rank_percentage' if threshold == 1 else f'top_{threshold}_percentage'
-            accuracy_data[i, j] = benchmarker_all.metrics[tool]['ranking'].get(metric_name, 0)
+    accuracy_data = np.array([[benchmarker.metrics[tool]['ranking'].get(f'top_{t}_percentage', 0) for t in thresholds] for tool in tool_order])
+    width = 0.15 
+    x = np.arange(len(tool_order))
+    for i, threshold in enumerate(thresholds):
+        offset = width * (i - len(thresholds) / 2 + 0.5)
+        bars = axB.bar(x + offset, accuracy_data[:, i], width, label=f'Top-{threshold}', color=colors[i])
+        axB.bar_label(bars, fmt='%.0f%%', fontsize=4, padding=2, rotation=90)
+    add_panel_label(axB, 'B')
+    axB.set_ylabel('Accuracy (%)', fontsize=6)
+    axB.set_xticks(x)
+    axB.set_xticklabels([tool_labels[t] for t in tool_order], fontsize=5, rotation=45, ha='right', fontweight='bold')
+    axB.legend(ncol=3, loc='upper center', bbox_to_anchor=(0.5, 1.15), fontsize=5, frameon=True)
+    axB.grid(True, axis='y', alpha=0.3, linewidth=0.5)
+    axB.set_ylim(0, 115) 
     
-    width = 0.15
-    x = np.arange(len(tools_all))
-    for i in range(len(thresholds)):
-        ax3.bar(x + (i - 2) * width, accuracy_data[:, i], width, label=f'Top-{thresholds[i]} Accuracy (%)', color=colors[i])
-    
-    ax3.set_title('C', loc='left', fontweight='bold', fontsize=20)
-    ax3.set_xlabel('Tool')
-    ax3.set_ylabel('Accuracy (%)')
-    ax3.set_xticks(x)
-    ax3.set_xticklabels(tools_all)
-    ax3.legend(ncol=3, loc='upper center', bbox_to_anchor=(0.5, 1.15), frameon=True, fancybox=True, shadow=True)
-    ax3.grid(True, alpha=0.3)
-    
-    # Panel D: Ranking accuracy for cancer samples
-    ax4 = fig1.add_subplot(2, 2, 4)
-    accuracy_data_cancer = np.zeros((len(tools_cancer), len(thresholds)))
-    for i, tool in enumerate(tools_cancer):
-        for j, threshold in enumerate(thresholds):
-            metric_name = f'top_rank_percentage' if threshold == 1 else f'top_{threshold}_percentage'
-            accuracy_data_cancer[i, j] = benchmarker_cancer.metrics[tool]['ranking'].get(metric_name, 0)
-    
-    x_cancer = np.arange(len(tools_cancer))
-    for i in range(len(thresholds)):
-        ax4.bar(x_cancer + (i - 2) * width, accuracy_data_cancer[:, i], width, label=f'Top-{thresholds[i]} Accuracy (%)', color=colors[i])
-    
-    ax4.set_title('D', loc='left', fontweight='bold', fontsize=20)
-    ax4.set_xlabel('Tool')
-    ax4.set_ylabel('Accuracy (%)')
-    ax4.set_xticks(x_cancer)
-    ax4.set_xticklabels(tools_cancer)
-    ax4.legend(ncol=3, loc='upper center', bbox_to_anchor=(0.5, 1.15), frameon=True, fancybox=True, shadow=True)
-    ax4.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.subplots_adjust(right=0.90, hspace=0.3, wspace=0.4)  # Add space for legends
-    plt.savefig(os.path.join(output_dir, 'Figure1_performance_overview.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # Figure 2: Retention rates and F1/Recall
-    print("Generating Figure 2: Retention and balanced performance...")
-    fig2 = plt.figure(figsize=(20, 10))
-    
-    # Panel A: Retention rate for all samples
-    ax1 = fig2.add_subplot(2, 2, 1)
-    retention_all = [benchmarker_all.metrics[tool]['filtering'].get('retention_rate', 0) for tool in tools_all]
-    ax1.bar(tools_all, retention_all, color='#4CAF50')
-    ax1.set_title('A', loc='left', fontweight='bold', fontsize=20)
-    ax1.set_xlabel('Tool')
-    ax1.set_ylabel('Retention Rate (%)')
-    ax1.grid(True, axis='y', alpha=0.3)
-    
-    # Panel B: Retention rate for cancer samples
-    ax2 = fig2.add_subplot(2, 2, 2)
-    retention_cancer = [benchmarker_cancer.metrics[tool]['filtering'].get('retention_rate', 0) for tool in tools_cancer]
-    ax2.bar(tools_cancer, retention_cancer, color='#4CAF50')
-    ax2.set_title('B', loc='left', fontweight='bold', fontsize=20)
-    ax2.set_xlabel('Tool')
-    ax2.set_ylabel('Retention Rate (%)')
-    ax2.grid(True, axis='y', alpha=0.3)
-    
-    # Panel C: F1 and Recall for all samples
-    ax3 = fig2.add_subplot(2, 2, 3)
-    f1_all = [benchmarker_all.metrics[tool]['accuracy'].get('f1_score', 0) for tool in tools_all]
-    recall_all = [benchmarker_all.metrics[tool]['accuracy'].get('recall', 0) for tool in tools_all]
-    x = np.arange(len(tools_all))
-    width = 0.35
-    ax3.bar(x - width/2, f1_all, width, label='F1 Score')
-    ax3.bar(x + width/2, recall_all, width, label='Recall')
-    ax3.set_title('C', loc='left', fontweight='bold', fontsize=20)
-    ax3.set_xlabel('Tool')
-    ax3.set_ylabel('Score')
-    ax3.set_xticks(x)
-    ax3.set_xticklabels(tools_all)
-    ax3.legend()
-    ax3.grid(True, axis='y', alpha=0.3)
-    
-    # Panel D: F1 and Recall for cancer samples
-    ax4 = fig2.add_subplot(2, 2, 4)
-    f1_cancer = [benchmarker_cancer.metrics[tool]['accuracy'].get('f1_score', 0) for tool in tools_cancer]
-    recall_cancer = [benchmarker_cancer.metrics[tool]['accuracy'].get('recall', 0) for tool in tools_cancer]
-    x_cancer = np.arange(len(tools_cancer))
-    ax4.bar(x_cancer - width/2, f1_cancer, width, label='F1 Score')
-    ax4.bar(x_cancer + width/2, recall_cancer, width, label='Recall')
-    ax4.set_title('D', loc='left', fontweight='bold', fontsize=20)
-    ax4.set_xlabel('Tool')
-    ax4.set_ylabel('Score')
-    ax4.set_xticks(x_cancer)
-    ax4.set_xticklabels(tools_cancer)
-    ax4.legend()
-    ax4.grid(True, axis='y', alpha=0.3)
-    
-    plt.tight_layout()
-    plt.subplots_adjust(hspace=0.4, wspace=0.3)  # Add space between subplots
-    plt.savefig(os.path.join(output_dir, 'Figure2_retention_f1.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # Figure 3: Rank distributions, CDFs, and ROC curves
-    print("Generating Figure 3: Ranking distributions and AUC...")
-    fig3 = plt.figure(figsize=(20, 15))
-    
-    # Panel A: Rank distribution for all samples
-    ax1 = fig3.add_subplot(3, 2, 1)
+    # --- Panel C: Retention Rate (with labels) ---
+    retention = [benchmarker.metrics[tool]['filtering'].get('retention_rate', 0) for tool in tool_order]
+    bars = axC.bar(range(len(tool_order)), retention, color='#4CAF50')
+    add_panel_label(axC, 'C')
+    axC.set_ylabel('Retention Rate (%)', fontsize=6)
+    axC.set_xticks(range(len(tool_order)))
+    axC.set_xticklabels([tool_labels[t] for t in tool_order], fontsize=5, rotation=45, ha='right', fontweight='bold')
+    axC.grid(True, axis='y', alpha=0.3, linewidth=0.5)
+    axC.set_ylim(0, 105)
+    axC.bar_label(bars, fmt='%.0f%%', fontsize=5, padding=2)
+
+    # --- Panel D: Rank Distribution (with labels) ---
+    categories = ['1st', '2-5', '6-10', '>10', 'Not Found']
+    colors_stacked = ['#4daf4a', '#ff7f00', '#377eb8', '#984ea3', '#e41a1c']
     rank_distributions = []
-    categories = ['1st', '2nd-5th', '6th-10th', '>10th', 'FONP']
-    colors = ['#4daf4a', '#ff7f00', '#377eb8', '#984ea3', '#e41a1c']
-    
-    for tool in tools_all:
-        counts = {'1st': 0, '2nd-5th': 0, '6th-10th': 0, '>10th': 0, 'FONP': 0}
-        for sample_id, true_gene in ground_truth_all.items():
-            if sample_id in benchmarker_all.tool_data[tool]:
-                ranked_genes = benchmarker_all.tool_data[tool][sample_id]
-                if true_gene in ranked_genes:
-                    rank = ranked_genes.index(true_gene) + 1
-                    if rank == 1:
-                        counts['1st'] += 1
-                    elif 2 <= rank <= 5:
-                        counts['2nd-5th'] += 1
-                    elif 6 <= rank <= 10:
-                        counts['6th-10th'] += 1
-                    else:
-                        counts['>10th'] += 1
-                else:
-                    counts['FONP'] += 1
-            else:
-                counts['FONP'] += 1
-        total = sum(counts.values())
-        percentages = {k: (v / total * 100) for k, v in counts.items()}
-        rank_distributions.append([percentages[cat] for cat in categories])
+    for tool in tool_order:
+        dist_pct = benchmarker.metrics[tool]['distribution']['rank_distribution_percentage']
+        rank_distributions.append([dist_pct[cat] for cat in categories])
     
     data = np.array(rank_distributions).T
-    bottoms = np.zeros(len(tools_all))
-    for i, (cat, color) in enumerate(zip(categories, colors)):
-        ax1.bar(tools_all, data[i], bottom=bottoms, label=cat, color=color)
-        for j, tool in enumerate(tools_all):
-            if data[i][j] > 5:
-                ax1.text(j, bottoms[j] + data[i][j]/2, f"{data[i][j]:.1f}%", ha='center', va='center', fontsize=10)
+    bottoms = np.zeros(len(tool_order))
+    for i, cat in enumerate(categories):
+        bars = axD.bar(range(len(tool_order)), data[i], bottom=bottoms, label=cat, color=colors_stacked[i])
+        for j, bar in enumerate(bars):
+            val = data[i, j]
+            if val > 6:
+                axD.text(bar.get_x() + bar.get_width()/2, 
+                         bottoms[j] + val/2, 
+                         f'{val:.0f}%', 
+                         ha='center', va='center', fontsize=4, color='black', fontweight='bold')
         bottoms += data[i]
+
+    add_panel_label(axD, 'D')
+    axD.set_ylabel('Percentage of Cases (%)', fontsize=6)
+    axD.set_xticks(range(len(tool_order)))
+    axD.set_xticklabels([tool_labels[t] for t in tool_order], fontsize=5, rotation=45, ha='right', fontweight='bold')
     
-    ax1.set_title('A', loc='left', fontweight='bold', fontsize=20)
-    ax1.set_xlabel('Tool')
-    ax1.set_ylabel('Percentage (%)')
-    ax1.legend(title='Rank', loc='upper left', bbox_to_anchor=(1.02, 1), frameon=True, fancybox=True, shadow=True)
-    ax1.set_ylim(0, 100)
-    ax1.grid(True, axis='y', alpha=0.3)
+    handles, labels = axD.get_legend_handles_labels()
+    axD.legend(handles[::-1], labels[::-1], title='Rank', loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=3, fontsize=5)
+    axD.set_ylim(0, 100)
+
+    plt.tight_layout(rect=[0, 0.05, 1, 0.95])
+    plt.savefig(os.path.join(output_dir, 'Figure1_performance_overview.pdf'), format='pdf')
+    plt.savefig(os.path.join(output_dir, 'Figure1_performance_overview.png'), format='png')
+    plt.close()
+
+    # =============================================================================
+    # Figure 2: Precision & Ranking Curves
+    # =============================================================================
+    print("Generating Figure 2: Precision & Ranking Curves...")
+    fig2, axes = plt.subplots(2, 2, figsize=(COLUMN_WIDTH_INCHES, COLUMN_WIDTH_INCHES * 0.9))
+    axA, axB, axC, axD = axes.flatten()
+
+    # --- Panel A: Precision Curve ---
+    thresholds_prec = [1, 5, 10, 20, 50]
+    for tool in tool_order:
+        values = [benchmarker.metrics[tool]['accuracy'].get(f'precision_at_{t}', 0) for t in thresholds_prec]
+        axA.plot(thresholds_prec, values, marker='o', markersize=3, linewidth=1, label=tool_labels[tool], color=tool_colors.get(tool, None))
+    add_panel_label(axA, 'A')
+    axA.set_xlabel('Rank Threshold (k)', fontsize=6)
+    axA.set_ylabel('Mean Precision@k', fontsize=6)
+    axA.set_xticks(thresholds_prec)
+    axA.set_xscale('log')
+    axA.legend(loc='upper right', fontsize=5)
+    axA.grid(True, alpha=0.3, linewidth=0.5)
+
+    # --- Panel B: F1 and Recall (Line Plot) ---
+    f1_scores = [benchmarker.metrics[tool]['accuracy'].get('f1_score', 0) for tool in tool_order]
+    recall_scores = [benchmarker.metrics[tool]['accuracy'].get('recall', 0) for tool in tool_order]
+    x = np.arange(len(tool_order))
+    axB.plot(x, f1_scores, marker='o', linestyle='-', label='F1 Score', color='#2196F3', markersize=4)
+    axB.plot(x, recall_scores, marker='s', linestyle='--', label='Recall', color='#FF9800', markersize=4)
+    add_panel_label(axB, 'B')
+    axB.set_ylabel('Score', fontsize=6)
+    axB.set_xticks(x)
+    axB.set_xticklabels([tool_labels[t] for t in tool_order], fontsize=6, rotation=45, ha='right', fontweight='bold')
+    axB.legend(fontsize=5, loc='best')
+    axB.grid(True, axis='y', alpha=0.3, linewidth=0.5)
+    axB.set_ylim(0, 1.0)
     
-    # Panel B: Rank distribution for cancer samples
-    ax2 = fig3.add_subplot(3, 2, 2)
-    rank_distributions_cancer = []
-    
-    for tool in tools_cancer:
-        counts = {'1st': 0, '2nd-5th': 0, '6th-10th': 0, '>10th': 0, 'FONP': 0}
-        for sample_id, true_gene in ground_truth_cancer.items():
-            if sample_id in benchmarker_cancer.tool_data[tool]:
-                ranked_genes = benchmarker_cancer.tool_data[tool][sample_id]
-                if true_gene in ranked_genes:
-                    rank = ranked_genes.index(true_gene) + 1
-                    if rank == 1:
-                        counts['1st'] += 1
-                    elif 2 <= rank <= 5:
-                        counts['2nd-5th'] += 1
-                    elif 6 <= rank <= 10:
-                        counts['6th-10th'] += 1
-                    else:
-                        counts['>10th'] += 1
+    # --- Panel C: ROC/AUC Curve ---
+    for tool in tool_order:
+        auc_score = benchmarker.metrics[tool]['accuracy'].get('auc', np.nan)
+        if not np.isnan(auc_score):
+            # Recreate data for plotting
+            all_scores, all_labels = [], []
+            for sample_id, true_gene in ground_truth.items():
+                if sample_id in benchmarker.tool_data[tool]:
+                    ranked_genes = benchmarker.tool_data[tool][sample_id]
+                    for i, gene in enumerate(ranked_genes):
+                        all_scores.append(benchmarker.max_rank_length - i)
+                        all_labels.append(1 if gene == true_gene else 0)
+                    if true_gene not in ranked_genes:
+                        all_scores.append(0)
+                        all_labels.append(1)
                 else:
-                    counts['FONP'] += 1
-            else:
-                counts['FONP'] += 1
-        total = sum(counts.values())
-        percentages = {k: (v / total * 100) for k, v in counts.items()}
-        rank_distributions_cancer.append([percentages[cat] for cat in categories])
-    
-    data_cancer = np.array(rank_distributions_cancer).T
-    bottoms_cancer = np.zeros(len(tools_cancer))
-    for i, (cat, color) in enumerate(zip(categories, colors)):
-        ax2.bar(tools_cancer, data_cancer[i], bottom=bottoms_cancer, label=cat, color=color)
-        for j, tool in enumerate(tools_cancer):
-            if data_cancer[i][j] > 5:
-                ax2.text(j, bottoms_cancer[j] + data_cancer[i][j]/2, f"{data_cancer[i][j]:.1f}%", ha='center', va='center', fontsize=10)
-        bottoms_cancer += data_cancer[i]
-    
-    ax2.set_title('B', loc='left', fontweight='bold', fontsize=20)
-    ax2.set_xlabel('Tool')
-    ax2.set_ylabel('Percentage (%)')
-    ax2.legend(title='Rank', loc='upper left', bbox_to_anchor=(1.02, 1), frameon=True, fancybox=True, shadow=True)
-    ax2.set_ylim(0, 100)
-    ax2.grid(True, axis='y', alpha=0.3)
-    
-    # Panel C: CDF for all samples
-    ax3 = fig3.add_subplot(3, 2, 3)
-    for tool in tools_all:
-        ranks = []
-        for sample_id, true_gene in ground_truth_all.items():
-            if sample_id in benchmarker_all.tool_data[tool]:
-                ranked_genes = benchmarker_all.tool_data[tool][sample_id]
-                if true_gene in ranked_genes:
-                    rank = ranked_genes.index(true_gene) + 1
-                else:
-                    rank = len(ranked_genes) + 1
-                ranks.append(rank)
-        if ranks:
-            x = np.sort(ranks)
-            y = np.arange(1, len(x) + 1) / len(x)
-            ax3.step(x, y, label=tool, linewidth=2, color=tool_colors.get(tool, None))
-    
-    ax3.set_title('C', loc='left', fontweight='bold', fontsize=20)
-    ax3.set_xlabel('Rank')
-    ax3.set_ylabel('Cumulative Probability')
-    ax3.legend(loc='lower right', frameon=True, fancybox=True, shadow=True)
-    ax3.grid(True, alpha=0.3)
-    ax3.set_xlim(0, 200)  # Limit x-axis for better visibility
-    
-    # Panel D: CDF for cancer samples
-    ax4 = fig3.add_subplot(3, 2, 4)
-    for tool in tools_cancer:
-        ranks = []
-        for sample_id, true_gene in ground_truth_cancer.items():
-            if sample_id in benchmarker_cancer.tool_data[tool]:
-                ranked_genes = benchmarker_cancer.tool_data[tool][sample_id]
-                if true_gene in ranked_genes:
-                    rank = ranked_genes.index(true_gene) + 1
-                else:
-                    rank = len(ranked_genes) + 1
-                ranks.append(rank)
-        if ranks:
-            x = np.sort(ranks)
-            y = np.arange(1, len(x) + 1) / len(x)
-            ax4.step(x, y, label=tool, linewidth=2, color=tool_colors.get(tool, None))
-    
-    ax4.set_title('D', loc='left', fontweight='bold', fontsize=20)
-    ax4.set_xlabel('Rank')
-    ax4.set_ylabel('Cumulative Probability')
-    ax4.legend(loc='lower right', frameon=True, fancybox=True, shadow=True)
-    ax4.grid(True, alpha=0.3)
-    ax4.set_xlim(0, 100)  # Limit x-axis for better visibility
-    
-    # Panel E: ROC curves for all samples
-    ax5 = fig3.add_subplot(3, 2, 5)
-    for tool, rankings in benchmarker_all.tool_data.items():
-        all_scores = []
-        all_labels = []
-        
-        max_length = 0
-        for sample_id in ground_truth_all.keys():
-            if sample_id in rankings:
-                max_length = max(max_length, len(rankings[sample_id]))
-        
-        if max_length == 0:
-            continue
-        
-        for sample_id, true_gene in ground_truth_all.items():
-            if sample_id in rankings:
-                ranked_genes = rankings[sample_id]
-                for i, gene in enumerate(ranked_genes):
-                    score = max_length - i
-                    label = 1 if gene == true_gene else 0
-                    all_scores.append(score)
-                    all_labels.append(label)
-                if true_gene not in ranked_genes:
                     all_scores.append(0)
                     all_labels.append(1)
-        
-        if len(set(all_labels)) == 2 and len(all_scores) > 0:
-            try:
+            if len(all_labels) > 0 and len(set(all_labels)) > 1:
                 fpr, tpr, _ = metrics.roc_curve(all_labels, all_scores)
-                auc_score = metrics.auc(fpr, tpr)
-                ax5.plot(fpr, tpr, color=tool_colors.get(tool, None), linewidth=2.5, 
-                        label=f'{tool} (AUC = {auc_score:.3f})')
-            except:
-                pass
-    
-    ax5.plot([0, 1], [0, 1], 'k--', linewidth=2, label='Random')
-    ax5.set_title('E', loc='left', fontweight='bold', fontsize=20)
-    ax5.set_xlabel('False Positive Rate')
-    ax5.set_ylabel('True Positive Rate')
-    ax5.legend(loc='lower right', frameon=True, fancybox=True, shadow=True)
-    ax5.grid(True, alpha=0.3)
-    
-    # Panel F: ROC curves for cancer samples
-    ax6 = fig3.add_subplot(3, 2, 6)
-    for tool, rankings in benchmarker_cancer.tool_data.items():
-        all_scores = []
-        all_labels = []
-        
-        max_length = 0
-        for sample_id in ground_truth_cancer.keys():
-            if sample_id in rankings:
-                max_length = max(max_length, len(rankings[sample_id]))
-        
-        if max_length == 0:
-            continue
-        
-        for sample_id, true_gene in ground_truth_cancer.items():
-            if sample_id in rankings:
-                ranked_genes = rankings[sample_id]
-                for i, gene in enumerate(ranked_genes):
-                    score = max_length - i
-                    label = 1 if gene == true_gene else 0
-                    all_scores.append(score)
-                    all_labels.append(label)
-                if true_gene not in ranked_genes:
-                    all_scores.append(0)
-                    all_labels.append(1)
-        
-        if len(set(all_labels)) == 2 and len(all_scores) > 0:
-            try:
-                fpr, tpr, _ = metrics.roc_curve(all_labels, all_scores)
-                auc_score = metrics.auc(fpr, tpr)
-                ax6.plot(fpr, tpr, color=tool_colors.get(tool, None), linewidth=2.5, 
-                        label=f'{tool} (AUC = {auc_score:.3f})')
-            except:
-                pass
-    
-    ax6.plot([0, 1], [0, 1], 'k--', linewidth=2, label='Random')
-    ax6.set_title('F', loc='left', fontweight='bold', fontsize=20)
-    ax6.set_xlabel('False Positive Rate')
-    ax6.set_ylabel('True Positive Rate')
-    ax6.legend(loc='lower right', frameon=True, fancybox=True, shadow=True)
-    ax6.grid(True, alpha=0.3)
-    
+                axC.plot(fpr, tpr, color=tool_colors.get(tool, None), linewidth=1.5, label=f'{tool_labels[tool]} (AUC={auc_score:.3f})')
+    axC.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Random')
+    add_panel_label(axC, 'C')
+    axC.set_xlabel('False Positive Rate', fontsize=6)
+    axC.set_ylabel('True Positive Rate', fontsize=6)
+    axC.legend(loc='lower right', fontsize=5)
+    axC.grid(True, alpha=0.3, linewidth=0.5)
+
+    # --- Panel D: ECDF Plot ---
+    for tool in tool_order:
+        ranks = benchmarker.metrics[tool]['distribution'].get('ecdf_ranks', [])
+        if ranks:
+            x_ranks = np.sort(ranks)
+            y_ranks = np.arange(1, len(x_ranks) + 1) / len(x_ranks)
+            axD.step(x_ranks, y_ranks, label=tool_labels[tool], linewidth=1.5, color=tool_colors.get(tool, None))
+    add_panel_label(axD, 'D')
+    axD.set_xlabel('Rank', fontsize=6)
+    axD.set_ylabel('Cumulative Probability', fontsize=6)
+    axD.legend(loc='lower right', fontsize=5)
+    axD.grid(True, alpha=0.3, linewidth=0.5)
+    axD.set_xlim(0, 50)
+
     plt.tight_layout()
-    plt.subplots_adjust(right=0.85, hspace=0.35, wspace=0.3)  # Add space for legends
-    plt.savefig(os.path.join(output_dir, 'Figure3_distributions_auc.png'), dpi=300, bbox_inches='tight')
+    plt.subplots_adjust(hspace=0.5, wspace=0.35)
+    plt.savefig(os.path.join(output_dir, 'Figure2_precision_curves.pdf'), format='pdf')
+    plt.savefig(os.path.join(output_dir, 'Figure2_precision_curves.png'), format='png')
     plt.close()
+
+    # =============================================================================
+    # Figure 3: Statistical Validation
+    # =============================================================================
+    print("Generating Figure 3: Statistical Validation...")
+    fig3, axes = plt.subplots(1, 2, figsize=(COLUMN_WIDTH_INCHES, SINGLE_COLUMN_WIDTH * 1.1))
+    axA, axB = axes.flatten()
     
-    # Figure 4: Precision curves and rank comparisons
-    print("Generating Figure 4: Precision and ranking efficiency...")
-    fig4 = plt.figure(figsize=(20, 10))
-    
-    # Panel A: Precision curves for all samples
-    ax1 = fig4.add_subplot(2, 2, 1)
-    thresholds = [1, 5, 10, 20, 50]
-    for tool in tools_all:
-        values = [benchmarker_all.metrics[tool]['accuracy'].get(f'precision_at_{threshold}', 0) for threshold in thresholds]
-        ax1.plot(thresholds, values, marker='o', linewidth=2, label=tool, color=tool_colors.get(tool, None))
-    
-    ax1.set_title('A', loc='left', fontweight='bold', fontsize=20)
-    ax1.set_xlabel('Rank Threshold')
-    ax1.set_ylabel('Precision')
-    ax1.set_xticks(thresholds)
-    ax1.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
-    ax1.grid(True, alpha=0.3)
-    
-    # Panel B: Precision curves for cancer samples
-    ax2 = fig4.add_subplot(2, 2, 2)
-    for tool in tools_cancer:
-        values = [benchmarker_cancer.metrics[tool]['accuracy'].get(f'precision_at_{threshold}', 0) for threshold in thresholds]
-        ax2.plot(thresholds, values, marker='o', linewidth=2, label=tool, color=tool_colors.get(tool, None))
-    
-    ax2.set_title('B', loc='left', fontweight='bold', fontsize=20)
-    ax2.set_xlabel('Rank Threshold')
-    ax2.set_ylabel('Precision')
-    ax2.set_xticks(thresholds)
-    ax2.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
-    ax2.grid(True, alpha=0.3)
-    
-    # Panel C: Mean and median ranks for all samples
-    ax3 = fig4.add_subplot(2, 2, 3)
-    mean_ranks = [benchmarker_all.metrics[tool]['ranking'].get('mean_rank', 0) for tool in tools_all]
-    median_ranks = [benchmarker_all.metrics[tool]['ranking'].get('median_rank', 0) for tool in tools_all]
-    x = np.arange(len(tools_all))
-    width = 0.35
-    ax3.bar(x - width/2, mean_ranks, width, label='Mean Rank')
-    ax3.bar(x + width/2, median_ranks, width, label='Median Rank')
-    ax3.set_title('C', loc='left', fontweight='bold', fontsize=20)
-    ax3.set_xlabel('Tool')
-    ax3.set_ylabel('Rank')
-    ax3.set_xticks(x)
-    ax3.set_xticklabels(tools_all)
-    ax3.legend()
-    ax3.grid(True, axis='y', alpha=0.3)
-    
-    # Panel D: Mean and median ranks for cancer samples
-    ax4 = fig4.add_subplot(2, 2, 4)
-    mean_ranks_cancer = [benchmarker_cancer.metrics[tool]['ranking'].get('mean_rank', 0) for tool in tools_cancer]
-    median_ranks_cancer = [benchmarker_cancer.metrics[tool]['ranking'].get('median_rank', 0) for tool in tools_cancer]
-    x_cancer = np.arange(len(tools_cancer))
-    ax4.bar(x_cancer - width/2, mean_ranks_cancer, width, label='Mean Rank')
-    ax4.bar(x_cancer + width/2, median_ranks_cancer, width, label='Median Rank')
-    ax4.set_title('D', loc='left', fontweight='bold', fontsize=20)
-    ax4.set_xlabel('Tool')
-    ax4.set_ylabel('Rank')
-    ax4.set_xticks(x_cancer)
-    ax4.set_xticklabels(tools_cancer)
-    ax4.legend()
-    ax4.grid(True, axis='y', alpha=0.3)
-    
-    plt.tight_layout()
-    plt.subplots_adjust(hspace=0.4, wspace=0.3)  # Add space between subplots
-    plt.savefig(os.path.join(output_dir, 'Figure4_precision_ranks.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # Figure 5: Statistical tests
-    print("Generating Figure 5: Statistical validation...")
-    fig5 = plt.figure(figsize=(20, 15))
-    
-    # Panel A: Bootstrap CIs for all samples
-    ax1 = fig5.add_subplot(3, 2, 1)
+    # --- Panel A: Bootstrap CIs ---
     metrics_list = ['top_rank_percentage', 'top_5_percentage', 'top_10_percentage']
     labels = ['Top-1', 'Top-5', 'Top-10']
     x_pos = np.arange(len(labels))
-    
-    for i, tool in enumerate(tools_all):
-        if tool in benchmarker_all.statistical_tests['bootstrap_ci']:
+    for i, tool in enumerate(tool_order):
+        if tool in benchmarker.statistical_tests['bootstrap_ci']:
             means, lowers, uppers = [], [], []
             for metric in metrics_list:
-                ci_data = benchmarker_all.statistical_tests['bootstrap_ci'][tool][metric]
-                means.append(ci_data['mean'])
-                lowers.append(ci_data['lower'])
-                uppers.append(ci_data['upper'])
-            
-            offset = (i - len(tools_all)/2) * 0.1
+                ci_data = benchmarker.statistical_tests['bootstrap_ci'][tool][metric]
+                means.append(ci_data.get('mean', np.nan))
+                lowers.append(ci_data.get('lower', np.nan))
+                uppers.append(ci_data.get('upper', np.nan))
+            offset = (i - (len(tool_order) - 1) / 2) * 0.12
             yerr = [np.array(means) - np.array(lowers), np.array(uppers) - np.array(means)]
-            ax1.errorbar(x_pos + offset, means, yerr=yerr, fmt='o', capsize=5, 
-                        label=tool, color=tool_colors.get(tool, None))
-    
-    ax1.set_title('A', loc='left', fontweight='bold', fontsize=20)
-    ax1.set_xlabel('Metric')
-    ax1.set_ylabel('Percentage (%)')
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(labels)
-    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True, fancybox=True, shadow=True)
-    ax1.grid(True, alpha=0.3)
-    
-    # Panel B: Bootstrap CIs for cancer samples
-    ax2 = fig5.add_subplot(3, 2, 2)
-    for i, tool in enumerate(tools_cancer):
-        if tool in benchmarker_cancer.statistical_tests['bootstrap_ci']:
-            means, lowers, uppers = [], [], []
-            for metric in metrics_list:
-                ci_data = benchmarker_cancer.statistical_tests['bootstrap_ci'][tool][metric]
-                means.append(ci_data['mean'])
-                lowers.append(ci_data['lower'])
-                uppers.append(ci_data['upper'])
-            
-            offset = (i - len(tools_cancer)/2) * 0.1
-            yerr = [np.array(means) - np.array(lowers), np.array(uppers) - np.array(means)]
-            ax2.errorbar(x_pos + offset, means, yerr=yerr, fmt='o', capsize=5, 
-                        label=tool, color=tool_colors.get(tool, None))
-    
-    ax2.set_title('B', loc='left', fontweight='bold', fontsize=20)
-    ax2.set_xlabel('Metric')
-    ax2.set_ylabel('Percentage (%)')
-    ax2.set_xticks(x_pos)
-    ax2.set_xticklabels(labels)
-    ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True, fancybox=True, shadow=True)
-    ax2.grid(True, alpha=0.3)
-    
-    # Panel C: Nemenyi test for all samples
-    ax3 = fig5.add_subplot(3, 2, 3)
-    if 'nemenyi_test' in benchmarker_all.statistical_tests and 'tool_pairs' in benchmarker_all.statistical_tests['nemenyi_test']:
-        p_matrix = np.ones((len(tools_all), len(tools_all)))
-        for (tool1, tool2), data in benchmarker_all.statistical_tests['nemenyi_test']['tool_pairs'].items():
-            i, j = tools_all.index(tool1), tools_all.index(tool2)
-            p_matrix[i, j] = p_matrix[j, i] = data['p_value']
-        
-        mask = np.triu(np.ones_like(p_matrix, dtype=bool))
-        sns.heatmap(p_matrix, mask=mask, cmap='YlOrRd_r', vmin=0, vmax=0.1,
-                   annot=True, fmt='.3f', cbar_kws={'label': 'p-value'}, ax=ax3)
-        ax3.set_title('C', loc='left', fontweight='bold', fontsize=20)
-        ax3.set_xticklabels(tools_all, rotation=45)
-        ax3.set_yticklabels(tools_all)
-    
-    # Panel D: Nemenyi test for cancer samples
-    ax4 = fig5.add_subplot(3, 2, 4)
-    if 'nemenyi_test' in benchmarker_cancer.statistical_tests and 'tool_pairs' in benchmarker_cancer.statistical_tests['nemenyi_test']:
-        p_matrix_cancer = np.ones((len(tools_cancer), len(tools_cancer)))
-        for (tool1, tool2), data in benchmarker_cancer.statistical_tests['nemenyi_test']['tool_pairs'].items():
-            i, j = tools_cancer.index(tool1), tools_cancer.index(tool2)
-            p_matrix_cancer[i, j] = p_matrix_cancer[j, i] = data['p_value']
-        
-        mask_cancer = np.triu(np.ones_like(p_matrix_cancer, dtype=bool))
-        sns.heatmap(p_matrix_cancer, mask=mask_cancer, cmap='YlOrRd_r', vmin=0, vmax=0.1,
-                   annot=True, fmt='.3f', cbar_kws={'label': 'p-value'}, ax=ax4)
-        ax4.set_title('D', loc='left', fontweight='bold', fontsize=20)
-        ax4.set_xticklabels(tools_cancer, rotation=45)
-        ax4.set_yticklabels(tools_cancer)
-    
+            axA.errorbar(x_pos + offset, means, yerr=yerr, fmt='o', capsize=3, markersize=3, label=tool_labels[tool], color=tool_colors.get(tool, None), linewidth=1)
+    add_panel_label(axA, 'A')
+    axA.set_xlabel('Metric', fontsize=6)
+    axA.set_ylabel('Accuracy (%) with 95% CI', fontsize=6)
+    axA.set_xticks(x_pos)
+    axA.set_xticklabels(labels, fontsize=5)
+    axA.legend(bbox_to_anchor=(0.5, -0.2), loc='upper center', ncol=3, fontsize=5)
+    axA.grid(True, alpha=0.3, linewidth=0.5)
+    axA.set_ylim(-5, 100)
+
+    # --- Panel B: Friedman Rank Distribution (Violin Plot) ---
+    friedman_test = benchmarker.statistical_tests['friedman_test']
+    if friedman_test and 'rank_matrix' in friedman_test and friedman_test['rank_matrix'] is not None:
+        rank_matrix = friedman_test['rank_matrix']
+        p_value = friedman_test.get('p_value', np.nan)
+        df = pd.DataFrame(rank_matrix, columns=all_tools)
+        df_melted = df.melt(var_name='Tool', value_name='Rank')
+        violin_order = df.median().sort_values().index
+        sns.violinplot(ax=axB, x='Tool', y='Rank', data=df_melted, order=violin_order, palette=tool_colors, inner='box', cut=0, linewidth=0.5)
+        axB.set_xticklabels([tool_labels[t] for t in violin_order], rotation=45, ha="right", fontsize=6, fontweight='bold')
+        axB.set_ylabel('Rank Distribution', fontsize=6)
+        axB.set_xlabel('')
+        axB.set_yscale('symlog', linthresh=10)
+        axB.set_ylim(bottom=0)
+        title_text = f"Friedman Test (p = {p_value:.3f})" if not np.isnan(p_value) else "Friedman Test"
+        axB.set_title(title_text, fontsize=7)
+        axB.grid(axis='y', linestyle='--', alpha=0.6)
+    add_panel_label(axB, 'B')
+
     plt.tight_layout()
-    plt.subplots_adjust(hspace=0.4, wspace=0.3)  # Add space between subplots
-    plt.savefig(os.path.join(output_dir, 'Figure5_statistical_tests.png'), dpi=300, bbox_inches='tight')
+    plt.subplots_adjust(bottom=0.25)
+    plt.savefig(os.path.join(output_dir, 'Figure3_statistical_validation.pdf'), format='pdf')
+    plt.savefig(os.path.join(output_dir, 'Figure3_statistical_validation.png'), format='png')
     plt.close()
     
-    print(f"Combined panel figures saved to {output_dir}/")
-
+    print(f"Journal-compliant figures saved to {output_dir}/")
 
 def main():
-    """Main function to run the benchmark analysis with panel generation."""
-    base_dir = r"C:\Users\z5537966\OneDrive - UNSW\Desktop\new data\test\common_samples_only\Franklin\manual\final_combined_data\Testis\limited_samples"
-    unified_acmg_path = os.path.join(base_dir, "ACMG_185.csv")
+    """Main function to run the unified benchmark analysis and generate figures."""
+    # --- USER: Define your file paths here ---
+    base_dir = r"C:\Users\z5537966\OneDrive - UNSW\Desktop\new data\test\common_samples_only\Franklin\manual\final_combined_data\Testis\limited_samples\filtered_data"
+    unified_acmg_path = os.path.join(base_dir, "ACMG_163new.csv")
     lirical_folder_path = base_dir
-    manual_annotations_path = os.path.join(base_dir, "hgnc_standardized_matched_manual_annotations _185.xlsx")
+    manual_annotations_path = os.path.join(base_dir, "manual_163new.xlsx")
     
-    combined_output_dir = os.path.join(base_dir, "publication_figures")
+    output_dir = os.path.join(base_dir, "publication_figures_unified_analysis")
     
-    # Define cancer samples first
-    cancer_samples = [
-        # Original cancer samples
-        'PGERA2440', 'PGERA1112', 'PGERA2125', 'PGERA1788', 'G5500', 'G5620', 
-        'G2001380', 'G2101361', 'G1800091', 'G1800228', 
-        'G2200657', 'G1900091', 'G2000091', 'G1900228', 'G2000228', 'G2101380', 
-        'G2201380', 'G2201360', 'G2301360', 'G2300657', 'G2400657', 'G6500', 
-        'G7500', 'G7620', 'PGERA2112', 'PGERA3112', 'PGERA2788', 
-        'PGERA3788', 'PGERA3125', 'PGERA4125', 'PGERA3440', 'PGERA4440'
-    ]
+    print("\n===== BENCHMARKING ALL SAMPLES")
     
-    # Get all samples and exclude cancer samples for the first analysis
-    import pandas as pd
-    manual_data = pd.read_excel(manual_annotations_path)
-    
-    # Debug: Check what columns are available
-    print("Available columns in manual annotations:")
-    print(manual_data.columns.tolist())
-    
-    # Try to find the correct sample ID column
-    sample_id_column = None
-    possible_names = ['Sample id', 'sample_id', 'Sample_id', 'SampleID', 'Sample ID', 'ID', 'sample']
-    
-    for col_name in possible_names:
-        if col_name in manual_data.columns:
-            sample_id_column = col_name
-            break
-    
-    if sample_id_column is None:
-        print("Error: Could not find sample ID column. Please check the column names above.")
-        return
-    
-    print(f"Using column: '{sample_id_column}' for sample IDs")
-    
-    all_sample_ids = manual_data[sample_id_column].unique().tolist()
-    non_cancer_samples = [sample for sample in all_sample_ids if sample not in cancer_samples]
-    
-    print(f"Total samples: {len(all_sample_ids)}")
-    print(f"Cancer samples: {len(cancer_samples)}")
-    print(f"Non-cancer (Mendelian) samples: {len(non_cancer_samples)}")
-    
-    print("\n===== BENCHMARKING NON-CANCER SAMPLES (EXCLUDING CPSR AND CHARGER) =====")
-    benchmarker_all = VariantToolBenchmarker(
-        unified_acmg_path,
-        lirical_folder_path,
-        manual_annotations_path,
-        exclude_tools=['charger', 'cpsr', 'CPSR'],
-        sample_subset=non_cancer_samples,  # Only non-cancer samples
-        analysis_type='mendelian'
+    # Initialize the benchmarker for a single, unified analysis
+    benchmarker = VariantToolBenchmarker(
+        acmg_path=unified_acmg_path,
+        lirical_folder=lirical_folder_path,
+        manual_path=manual_annotations_path,
+        sample_subset=None,              # Use all available samples
+        analysis_type='all_samples'
     )
-    benchmarker_all.load_data()
-    benchmarker_all.calculate_metrics()
-    benchmarker_all.perform_statistical_tests()
-    benchmarker_all.calculate_auc()
     
-    print("\n\n===== BENCHMARKING CANCER SAMPLES (INCLUDING CPSR) =====")
-    benchmarker_cancer = VariantToolBenchmarker(
-        unified_acmg_path,
-        lirical_folder_path,
-        manual_annotations_path,
-        exclude_tools=['charger'], 
-        sample_subset=cancer_samples,
-        analysis_type='cancer'
-    )
-    benchmarker_cancer.load_data()
-    benchmarker_cancer.calculate_metrics()
-    benchmarker_cancer.perform_statistical_tests()
-    benchmarker_cancer.calculate_auc()
+    # Run the analysis pipeline
+    benchmarker.load_data()
+    benchmarker.calculate_metrics()
+    benchmarker.perform_statistical_tests()
     
-    # Generate combined panel figures
-    print("\n===== GENERATING COMBINED PANEL FIGURES =====")
-    generate_combined_panels(benchmarker_all, benchmarker_cancer, combined_output_dir)
+    # Generate the report and figures
+    print("\n===== GENERATING REPORT AND JOURNAL-COMPLIANT FIGURES =====")
     
-    # Generate reports
-    mendelian_report = os.path.join(combined_output_dir, "mendelian_samples_report.txt")
-    cancer_report = os.path.join(combined_output_dir, "cancer_samples_report.txt")
-    benchmarker_all.generate_report(mendelian_report)
-    benchmarker_cancer.generate_report(cancer_report)
+    report_path = os.path.join(output_dir, "unified_analysis_report.txt")
+    benchmarker.generate_report(report_path)
     
-    print(f"\nAnalysis complete! Publication-ready figures saved to: {combined_output_dir}")
+    generate_figures(benchmarker, output_dir)
+    
+    print(f"\nAnalysis complete! Figures and report saved to: {output_dir}")
 
 if __name__ == "__main__":
     main()
